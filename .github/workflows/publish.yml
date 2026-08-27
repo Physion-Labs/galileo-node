@@ -90,7 +90,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
-      # `--provenance` is implied by trusted publishing, and npm rejects the flag
-      # when it is redundant. Needs npm >= 11.5.1 for the OIDC exchange.
+      # Provenance comes from trusted publishing itself, not from a flag and not
+      # from `publishConfig` — it was in publishConfig once, which broke the very
+      # first publish (done by hand, where npm has no CI provider to attest to).
+      # Needs npm >= 11.5.1 for the OIDC exchange.
       - run: npm install -g npm@latest
       - run: npm publish --access public --tag "${{ inputs.tag }}"

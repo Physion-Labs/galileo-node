@@ -96,7 +96,18 @@ test("the package is publishable as a public scoped package with provenance", ()
   // A scoped package defaults to restricted; without this the first publish
   // fails on a paid-plan error that says nothing about the real cause.
   assert.equal(pkg.publishConfig.access, "public");
-  assert.equal(pkg.publishConfig.provenance, true);
+  // `provenance` is deliberately NOT here, and this asserts its absence.
+  //
+  // It was, and it broke the first publish: npm can only generate provenance
+  // inside a supported CI provider, so `npm publish` from a laptop fails with
+  // "Automatic provenance generation not supported for provider: null".
+  // publishConfig applies to EVERY publish, including the ones a person runs by
+  // hand — which is exactly the case the first release of a package is.
+  //
+  // Nothing is lost: trusted publishing generates provenance on its own, so the
+  // flag was redundant where it worked and fatal where it did not.
+  assert.equal(pkg.publishConfig.provenance, undefined,
+    "provenance in publishConfig breaks any publish outside CI");
   assert.equal(pkg.private, undefined, "a private package cannot be published at all");
 });
 

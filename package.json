@@ -46,8 +46,7 @@
     "verify:live": "node scripts/verify-live.mjs"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "engines": {
     "node": ">=20"
