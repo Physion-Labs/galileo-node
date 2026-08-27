@@ -487,9 +487,13 @@ export interface components {
             detectors?: components["schemas"]["DetectorState"][];
             /** @description Stored video identifier when the evaluation used an uploaded video. */
             video_id?: string | null;
+            /**
+             * @description Whatever you passed on create, echoed back. NULL when you passed nothing -- the key is always present, its value says whether there was any.
+             *     Only found by submitting through the API. Every evaluation created in the console carries metadata, so a contract checked against console traffic alone looked correct here.
+             */
             metadata?: {
                 [key: string]: unknown;
-            };
+            } | null;
         };
         EvaluationList: {
             /** @constant */

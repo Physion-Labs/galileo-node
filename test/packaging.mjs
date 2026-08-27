@@ -78,7 +78,11 @@ test("require() gets a usable default, not a module namespace", () => {
 
 test("`files` publishes the built output and nothing else", () => {
   const pkg = JSON.parse(read("package.json"));
-  assert.deepEqual(pkg.files, ["dist", "README.md"]);
+  // LICENSE and NOTICE are not optional extras: Apache-2.0 section 4 requires
+  // both to travel with any distribution, and npm publishes only what `files`
+  // names. Leaving them out ships a package whose own license terms it breaks.
+  assert.deepEqual(pkg.files, ["dist", "README.md", "LICENSE", "NOTICE"]);
+  assert.equal(pkg.license, "Apache-2.0");
   // Anything the loader can reach has to be inside `files`, or an install is
   // missing the file its own package.json names.
   for (const entry of [pkg.main, pkg.module, pkg.types]) {

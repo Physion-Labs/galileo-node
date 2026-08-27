@@ -48,5 +48,6 @@ pnpm test
 
 ## License
 
-Not yet chosen — see the repository's open issues. Until a LICENSE file lands,
-all rights are reserved.
+[Apache-2.0](LICENSE). Chosen over MIT for the explicit patent grant: MIT is
+silent on patents, which is one more thing for a reviewer to think about, and
+Apache-2.0's retaliation clause protects everyone using it.
