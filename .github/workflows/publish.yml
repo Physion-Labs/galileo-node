@@ -18,6 +18,16 @@ on:
           deployment WITH a key and reported no mismatches. Its exit code 2 —
           "INCOMPLETE" — is not a pass.
         required: true
+      tag:
+        description: >-
+          The npm dist-tag. A PRERELEASE MUST NOT GO TO `latest`: that is what
+          `npm install @physionlabs/galileo` resolves to, so tagging an rc there
+          hands every new caller an untested version. Use `next` for anything
+          with a hyphen in its version.
+        required: true
+        default: next
+        type: choice
+        options: [next, latest]
 
 permissions:
   contents: read
@@ -49,15 +59,29 @@ jobs:
             exit 1
           fi
 
-      - name: The tag must match what package.json says
+      - name: The version must match, and a prerelease must not claim `latest`
         env:
           WANT: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
         run: |
           have=$(node -p "require('./package.json').version")
           if [ "$have" != "$WANT" ]; then
             echo "::error::package.json is $have, you asked to publish $WANT."
             exit 1
           fi
+          # A version with a hyphen is a prerelease by semver. Publishing one to
+          # `latest` is the mistake this guard exists for: `npm install <pkg>`
+          # resolves `latest`, so it would hand an rc to every new caller — and
+          # unpublishing is not available to take it back.
+          case "$WANT" in
+            *-*) if [ "$TAG" = "latest" ]; then
+                   echo "::error::$WANT is a prerelease; publish it to \`next\`, not \`latest\`."
+                   exit 1
+                 fi ;;
+            *)   if [ "$TAG" != "latest" ]; then
+                   echo "::warning::$WANT is a release but is going to the \`$TAG\` tag."
+                 fi ;;
+          esac
 
       - run: pnpm install --frozen-lockfile
       # Everything the required CI does, again, here — a publish that skipped it
@@ -69,4 +93,4 @@ jobs:
       # `--provenance` is implied by trusted publishing, and npm rejects the flag
       # when it is redundant. Needs npm >= 11.5.1 for the OIDC exchange.
       - run: npm install -g npm@latest
-      - run: npm publish --access public
+      - run: npm publish --access public --tag "${{ inputs.tag }}"
