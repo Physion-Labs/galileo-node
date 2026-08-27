@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So the live job can be re-run against a deployment that has changed without
+  # a commit to this repo — which is most of the reason it exists. The API moves
+  # on its own schedule; a contract check that can only run when the SDK changes
+  # would notice a drift on whatever day someone next touched the SDK.
+  workflow_dispatch:
 
 jobs:
   test:
