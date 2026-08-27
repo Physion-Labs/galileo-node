@@ -50,9 +50,11 @@ export type Evaluation = Schemas["Evaluation"];
  *
  * Listed explicitly rather than blanket-`Partial`, so a field the contract
  * really does require stays required. `test/types.mjs` derives the same set from
- * the yaml and fails if this list drifts from it.
+ * the yaml and fails if this list drifts from it — which is how `prompt` left
+ * this list: PHY-93 made a prompt mandatory on every run, so the contract now
+ * requires it and it carries no default. The test said so before a human did.
  */
-type DefaultedByServer = "prompt" | "glitch_types";
+type DefaultedByServer = "glitch_types";
 
 export type EvaluationCreateParams = Omit<Schemas["EvaluationCreate"], DefaultedByServer> &
   Partial<Pick<Schemas["EvaluationCreate"], DefaultedByServer>>;
@@ -69,10 +71,29 @@ export type DetectorState = Schemas["DetectorState"];
 export type DetectorStatus = Schemas["DetectorStatus"];
 export type DetectorError = Schemas["DetectorError"];
 
+export type Timing = Schemas["Timing"];
+
 // --- Findings --------------------------------------------------------------
 
+/**
+ * One finding — a union discriminated on `type`, not one object with everything
+ * on it.
+ *
+ * The two kinds genuinely carry different fields: a visual glitch has a `region`
+ * in the clip, a prompt misalignment has the `prompt_segment` of your prompt and
+ * a `severity`. Narrowing on `type` gives you exactly the fields that apply:
+ *
+ *     if (finding.type === "prompt_misalignment") finding.severity;
+ *     else finding.region;
+ *
+ * Before this the two were one type with every field optional, so `severity` was
+ * reachable on a visual glitch, where it never appears.
+ */
 export type Glitch = Schemas["Glitch"];
+export type VisualGlitch = Schemas["VisualGlitch"];
+export type PromptMisalignment = Schemas["PromptMisalignment"];
 export type GlitchType = Schemas["GlitchType"];
+export type GlitchSource = Schemas["GlitchSource"];
 export type GlitchRegion = Schemas["GlitchRegion"];
 export type PromptSegment = Schemas["PromptSegment"];
 export type TimePoint = Schemas["TimePoint"];

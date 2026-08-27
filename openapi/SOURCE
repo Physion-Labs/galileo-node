@@ -14,4 +14,4 @@
 repo   = Physion-Labs/PhysionWebapps
 commit = 249157105bdd0aab7c28b8a0354a5a0da8f3b8b6
 path   = openapi/galileo-v1.yaml
-sha256 = c7005450372f2fc4768556590eac46efaeb0363478acbdc83c05141bd23b18cc
+sha256 = 63f751247fbd1427eda7c4db35ac9dcd79eb6059ba5685cd12091396defd29ba

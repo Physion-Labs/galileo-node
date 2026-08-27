@@ -67,7 +67,12 @@ test("the documented one-line call compiles", () => {
         `  prompt: "A red ball rolls off a table and bounces twice.",\n` +
         `  video: { url: "https://example.com/video.mp4" },\n` +
         `});\n` +
-        `void galileo.evaluations.create({ video: { url: "https://example.com/v.mp4" } });\n`,
+        // A prompt on this one too: PHY-93 made it mandatory, so a call without
+        // one is now correctly a type error rather than a shorter valid form.
+        `void galileo.evaluations.create({\n` +
+        `  prompt: "A red ball rolls off a table.",\n` +
+        `  video: { url: "https://example.com/v.mp4" },\n` +
+        `});\n`,
     );
     execFileSync(
       "pnpm",

@@ -698,7 +698,7 @@ components:
     EvaluationCreate:
       type: object
       additionalProperties: false
-      required: [video]
+      required: [prompt, video]
       properties:
         model:
           $ref: "#/components/schemas/ModelId"
@@ -708,9 +708,16 @@ components:
           description: Concrete model version to run. The deployment default applies when omitted.
         prompt:
           type: string
+          minLength: 1
+          # Unanchored, so this asserts "contains at least one non-whitespace
+          # character" — a prompt of spaces is refused by the server and must be
+          # refused here too, which `minLength` alone does not do.
+          pattern: "\\S"
           maxLength: 2500
-          default: ""
-          description: Required when prompt-misalignment detection runs.
+          description: >-
+            What the video was meant to show. REQUIRED as of 2026-08-27
+            (previously optional, defaulting to ""); empty or whitespace-only is
+            refused with `missing_prompt`.
         video:
           $ref: "#/components/schemas/VideoRef"
         glitch_types:
@@ -733,6 +740,7 @@ components:
             run_id: render-123
     TimePoint:
       type: object
+      additionalProperties: false
       required: [frame, sec, timecode]
       properties:
         frame:
@@ -746,6 +754,7 @@ components:
           pattern: "^[0-9]{2}:[0-9]{2}:[0-9]{2}:[0-9]{2}$"
     BoundingBox:
       type: object
+      additionalProperties: false
       required: [xmin, ymin, xmax, ymax]
       properties:
         xmin: { type: number, minimum: 0, maximum: 1 }
@@ -754,6 +763,7 @@ components:
         ymax: { type: number, minimum: 0, maximum: 1 }
     BoxKeyframe:
       type: object
+      additionalProperties: false
       required: [frame, sec, box]
       properties:
         frame: { type: integer, minimum: 0 }
@@ -762,6 +772,7 @@ components:
           $ref: "#/components/schemas/BoundingBox"
     GlitchRegion:
       type: object
+      additionalProperties: false
       required: [start, end, boxes]
       properties:
         start:
@@ -774,74 +785,99 @@ components:
             $ref: "#/components/schemas/BoxKeyframe"
     PromptSegment:
       type: object
+      additionalProperties: false
       required: [text, char_start, char_end]
       properties:
         text: { type: string }
         char_start: { type: integer, minimum: 0 }
         char_end: { type: integer, minimum: 0 }
     Glitch:
+      description: >-
+        One finding. Which fields it carries depends on `type`, so branch on that
+        rather than probing for a field.
+
+        A KEY THAT DOES NOT APPLY IS ABSENT, not null. This is a correction: the
+        service used to send `severity: null` on a visual glitch and
+        `prompt_segment: null` alongside it, and this schema said so. It no longer
+        does — the response is now assembled from an allowlist per finding type,
+        so a visual glitch has no `severity` key at all. Code written against the
+        old shape kept working, because `x.severity == null` is true either way;
+        code that tested `"severity" in x` did not.
+      oneOf:
+        - $ref: "#/components/schemas/VisualGlitch"
+        - $ref: "#/components/schemas/PromptMisalignment"
+      discriminator:
+        propertyName: type
+        mapping:
+          visual_glitch: "#/components/schemas/VisualGlitch"
+          prompt_misalignment: "#/components/schemas/PromptMisalignment"
+    GlitchSource:
+      type: string
+      enum: [model, human]
+      description: >-
+        Who produced this finding. Absent means the model, which is the common
+        case -- the field is only set explicitly where a human annotated
+        something the model missed, so treat its absence as `model` rather than
+        as unknown.
+
+        Deliberately NOT declared with a `default`. A default reads to a code
+        generator as "the server always sends this", and it does not: the value
+        is omitted, not defaulted, and a generated type that made it required
+        would be wrong on almost every finding.
+    VisualGlitch:
       type: object
+      additionalProperties: false
       required: [id, type, description]
       properties:
         id: { type: string }
         type:
-          $ref: "#/components/schemas/GlitchType"
+          type: string
+          const: visual_glitch
         description: { type: string }
-        prompt_segment:
-          description: >-
-            The prompt span this finding is about. `prompt_misalignment` only.
-
-            NULL, not absent, on a `visual_glitch`. The service sends the key
-            with a null value rather than omitting it, and this schema says so
-            because a contract that quietly disagreed with the wire would be
-            worse than an ugly one. Check for a value, not for the key.
-          anyOf:
-            - $ref: "#/components/schemas/PromptSegment"
-            - type: "null"
+        source:
+          $ref: "#/components/schemas/GlitchSource"
         region:
           description: >-
-            Where in the video this finding is. Public for `visual_glitch`.
+            Where in the video this finding is, with per-frame boxes.
 
-            NULL on a `prompt_misalignment`: the service produces one but it is
-            not stable enough to publish, so it is withheld — as a null value,
-            not an absent key.
-          anyOf:
-            - $ref: "#/components/schemas/GlitchRegion"
-            - type: "null"
-        source:
+            Absent on a finding the detector localised no further than the clip.
+          $ref: "#/components/schemas/GlitchRegion"
+    PromptMisalignment:
+      type: object
+      additionalProperties: false
+      required: [id, type, description]
+      properties:
+        id: { type: string }
+        type:
           type: string
-          enum: [model, human]
-          description: >-
-            Who produced this finding. Absent means the model, which is the
-            common case -- the field is only set explicitly where a human
-            annotated something the model missed, so treat its absence as
-            `model` rather than as unknown.
-
-            Deliberately NOT declared with a `default`. A default reads to a
-            code generator as "the server always sends this", and it does not:
-            the value is omitted, not defaulted, and a generated type that made
-            it required would be wrong on almost every finding.
+          const: prompt_misalignment
+        description: { type: string }
+        source:
+          $ref: "#/components/schemas/GlitchSource"
+        prompt_segment:
+          description: The span of your prompt this finding is about.
+          $ref: "#/components/schemas/PromptSegment"
         severity:
-          type: [integer, "null"]
+          type: integer
           minimum: 1
           maximum: 5
           description: >-
-            NULL on a `visual_glitch` -- the key is sent with a null value rather
-            than omitted, so test the value.
+            How far a prompt requirement was from being realized: `6 - score`, so
+            1 is a minor mismatch and 5 means the requirement is absent entirely.
+            It reads in the OPPOSITE direction from a score, which is the one
+            thing worth getting right before you threshold on it.
 
-            How far a prompt requirement was from being realized: `6 - score`,
-            so 1 is a minor mismatch and 5 means the requirement is absent
-            entirely. This is also the number the reporting threshold reads, so
-            a finding you receive is by definition one that cleared it.
+            This is also the number our own reporting threshold reads, so a
+            finding you receive is by definition one that cleared it.
 
-            In practice this is a `prompt_misalignment` field. The visual
-            detector does not score its findings, so a `visual_glitch` normally
-            has no `severity` at all; where one does appear it came from an
-            older pipeline and grades the defect rather than a requirement.
-            Either way it is optional — branch on `type` and handle its absence
-            rather than assuming a default.
+            There is deliberately no `confidence` beside it. That is the model's
+            certainty about its own answer -- a different axis, not stable across
+            releases, and not calibrated for anyone outside to threshold on.
+
+            Optional: a finding from an older pipeline may carry no score.
     EvaluationSummary:
       type: object
+      additionalProperties: false
       required: [num_glitches, has_visual_glitch, has_prompt_misalignment]
       properties:
         num_glitches: { type: integer, minimum: 0 }
@@ -849,6 +885,7 @@ components:
         has_prompt_misalignment: { type: boolean }
     VideoInfo:
       type: object
+      additionalProperties: false
       required: [duration_sec, width, height, fps, num_frames]
       properties:
         duration_sec: { type: number, minimum: 0 }
@@ -856,20 +893,40 @@ components:
         height: { type: integer, minimum: 1 }
         fps: { type: number, exclusiveMinimum: 0 }
         num_frames: { type: integer, minimum: 1 }
+    Timing:
+      type: object
+      additionalProperties: false
+      required: [e2e_ms]
+      properties:
+        e2e_ms:
+          type: integer
+          minimum: 0
+          description: >-
+            Milliseconds from submission to the terminal answer, measured by the
+            service. This is what you waited: it includes our queueing, fetching
+            the video, and the model's own time.
+
+            One number rather than a breakdown, deliberately. The finer
+            measurements are the model server's own clock in its own units, and a
+            number read from the wrong level is wrong by three orders of
+            magnitude rather than plausibly close.
     EvaluationUsage:
       type: object
+      additionalProperties: false
       required: [video_seconds, billable_units]
       properties:
         video_seconds: { type: number, minimum: 0 }
         billable_units: { type: number, minimum: 0 }
     DetectorError:
       type: object
+      additionalProperties: false
       required: [code, message]
       properties:
         code: { type: string }
         message: { type: string }
     DetectorState:
       type: object
+      additionalProperties: false
       required: [detector, status]
       properties:
         detector:
@@ -880,6 +937,7 @@ components:
           $ref: "#/components/schemas/DetectorError"
     EvaluationResult:
       type: object
+      additionalProperties: false
       required: [glitches, summary]
       properties:
         glitches:
@@ -890,6 +948,7 @@ components:
           $ref: "#/components/schemas/EvaluationSummary"
     EvaluationFailure:
       type: object
+      additionalProperties: false
       required: [type, code, message, request_id]
       properties:
         type: { type: string }
@@ -909,6 +968,7 @@ components:
         - input
         - usage
         - result
+        - timing
       properties:
         id:
           type: string
@@ -975,17 +1035,16 @@ components:
             produced by `POST /v1/evaluations/{evaluation_id}/retry`. There is a
             ceiling, so a clip that keeps failing under the same instructions
             stops being retryable rather than being retried forever.
-        retry_of:
-          type: [string, "null"]
-          description: The failed evaluation this one was filed to replace, if any.
-        retried_by:
-          type: [string, "null"]
+        timing:
           description: >-
-            The evaluation filed to replace this one, if it has been retried.
+            How long this run took. NULL when nothing was measured -- which is
+            every run settled before it was recorded, and is not backfillable.
 
-            Set at most once, which is what makes retrying idempotent: a burst of
-            presses claims this field exactly once, and every press that loses the
-            race is handed the winner.
+            Null and never 0. A run whose latency nobody recorded and a run that
+            took no time are different claims, and only one of them is true.
+          oneOf:
+            - $ref: "#/components/schemas/Timing"
+            - type: "null"
         metadata:
           type: [object, "null"]
           additionalProperties: true

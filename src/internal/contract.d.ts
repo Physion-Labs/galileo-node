@@ -404,10 +404,7 @@ export interface components {
             model?: components["schemas"]["ModelId"];
             /** @description Concrete model version to run. The deployment default applies when omitted. */
             model_version?: string;
-            /**
-             * @description Required when prompt-misalignment detection runs.
-             * @default
-             */
+            /** @description What the video was meant to show. REQUIRED as of 2026-08-27 (previously optional, defaulting to ""); empty or whitespace-only is refused with `missing_prompt`. */
             prompt: string;
             video: components["schemas"]["VideoRef"];
             /**
@@ -448,32 +445,50 @@ export interface components {
             char_start: number;
             char_end: number;
         };
-        Glitch: {
+        /**
+         * @description One finding. Which fields it carries depends on `type`, so branch on that rather than probing for a field.
+         *     A KEY THAT DOES NOT APPLY IS ABSENT, not null. This is a correction: the service used to send `severity: null` on a visual glitch and `prompt_segment: null` alongside it, and this schema said so. It no longer does — the response is now assembled from an allowlist per finding type, so a visual glitch has no `severity` key at all. Code written against the old shape kept working, because `x.severity == null` is true either way; code that tested `"severity" in x` did not.
+         */
+        Glitch: components["schemas"]["VisualGlitch"] | components["schemas"]["PromptMisalignment"];
+        /**
+         * @description Who produced this finding. Absent means the model, which is the common case -- the field is only set explicitly where a human annotated something the model missed, so treat its absence as `model` rather than as unknown.
+         *     Deliberately NOT declared with a `default`. A default reads to a code generator as "the server always sends this", and it does not: the value is omitted, not defaulted, and a generated type that made it required would be wrong on almost every finding.
+         * @enum {string}
+         */
+        GlitchSource: "model" | "human";
+        VisualGlitch: {
             id: string;
-            type: components["schemas"]["GlitchType"];
-            description: string;
             /**
-             * @description The prompt span this finding is about. `prompt_misalignment` only.
-             *     NULL, not absent, on a `visual_glitch`. The service sends the key with a null value rather than omitting it, and this schema says so because a contract that quietly disagreed with the wire would be worse than an ugly one. Check for a value, not for the key.
-             */
-            prompt_segment?: components["schemas"]["PromptSegment"] | null;
-            /**
-             * @description Where in the video this finding is. Public for `visual_glitch`.
-             *     NULL on a `prompt_misalignment`: the service produces one but it is not stable enough to publish, so it is withheld — as a null value, not an absent key.
-             */
-            region?: components["schemas"]["GlitchRegion"] | null;
-            /**
-             * @description Who produced this finding. Absent means the model, which is the common case -- the field is only set explicitly where a human annotated something the model missed, so treat its absence as `model` rather than as unknown.
-             *     Deliberately NOT declared with a `default`. A default reads to a code generator as "the server always sends this", and it does not: the value is omitted, not defaulted, and a generated type that made it required would be wrong on almost every finding.
+             * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            source?: "model" | "human";
+            type: "visual_glitch";
+            description: string;
+            source?: components["schemas"]["GlitchSource"];
             /**
-             * @description NULL on a `visual_glitch` -- the key is sent with a null value rather than omitted, so test the value.
-             *     How far a prompt requirement was from being realized: `6 - score`, so 1 is a minor mismatch and 5 means the requirement is absent entirely. This is also the number the reporting threshold reads, so a finding you receive is by definition one that cleared it.
-             *     In practice this is a `prompt_misalignment` field. The visual detector does not score its findings, so a `visual_glitch` normally has no `severity` at all; where one does appear it came from an older pipeline and grades the defect rather than a requirement. Either way it is optional — branch on `type` and handle its absence rather than assuming a default.
+             * @description Where in the video this finding is, with per-frame boxes.
+             *     Absent on a finding the detector localised no further than the clip.
              */
-            severity?: number | null;
+            region?: components["schemas"]["GlitchRegion"];
+        };
+        PromptMisalignment: {
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "prompt_misalignment";
+            description: string;
+            source?: components["schemas"]["GlitchSource"];
+            /** @description The span of your prompt this finding is about. */
+            prompt_segment?: components["schemas"]["PromptSegment"];
+            /**
+             * @description How far a prompt requirement was from being realized: `6 - score`, so 1 is a minor mismatch and 5 means the requirement is absent entirely. It reads in the OPPOSITE direction from a score, which is the one thing worth getting right before you threshold on it.
+             *     This is also the number our own reporting threshold reads, so a finding you receive is by definition one that cleared it.
+             *     There is deliberately no `confidence` beside it. That is the model's certainty about its own answer -- a different axis, not stable across releases, and not calibrated for anyone outside to threshold on.
+             *     Optional: a finding from an older pipeline may carry no score.
+             */
+            severity?: number;
         };
         EvaluationSummary: {
             num_glitches: number;
@@ -486,6 +501,13 @@ export interface components {
             height: number;
             fps: number;
             num_frames: number;
+        };
+        Timing: {
+            /**
+             * @description Milliseconds from submission to the terminal answer, measured by the service. This is what you waited: it includes our queueing, fetching the video, and the model's own time.
+             *     One number rather than a breakdown, deliberately. The finer measurements are the model server's own clock in its own units, and a number read from the wrong level is wrong by three orders of magnitude rather than plausibly close.
+             */
+            e2e_ms: number;
         };
         EvaluationUsage: {
             video_seconds: number;
@@ -539,13 +561,11 @@ export interface components {
             video_id?: string | null;
             /** @description Which try this is. 1 for a run submitted directly; 2 or more for one produced by `POST /v1/evaluations/{evaluation_id}/retry`. There is a ceiling, so a clip that keeps failing under the same instructions stops being retryable rather than being retried forever. */
             attempt?: number;
-            /** @description The failed evaluation this one was filed to replace, if any. */
-            retry_of?: string | null;
             /**
-             * @description The evaluation filed to replace this one, if it has been retried.
-             *     Set at most once, which is what makes retrying idempotent: a burst of presses claims this field exactly once, and every press that loses the race is handed the winner.
+             * @description How long this run took. NULL when nothing was measured -- which is every run settled before it was recorded, and is not backfillable.
+             *     Null and never 0. A run whose latency nobody recorded and a run that took no time are different claims, and only one of them is true.
              */
-            retried_by?: string | null;
+            timing: components["schemas"]["Timing"] | null;
             /**
              * @description Whatever you passed on create, echoed back. NULL when you passed nothing -- the key is always present, its value says whether there was any.
              *     Only found by submitting through the API. Every evaluation created in the console carries metadata, so a contract checked against console traffic alone looked correct here.
