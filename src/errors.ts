@@ -18,8 +18,26 @@ export interface ApiErrorInit {
   headers?: Headers | undefined;
 }
 
-/** Base class for every error the API itself reported. */
+/**
+ * Base class for everything this client throws.
+ *
+ * Catch this to catch anything — including the failures where the API never
+ * answered. That is the whole reason it is separate from `APIError` below: a
+ * caller who wants "something went wrong in the client" and a caller who wants
+ * "the server said no" are asking different questions, and only the second one
+ * has a status code.
+ *
+ * The Python client draws the same line with the same two names.
+ */
 export class GalileoError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
+/** The API answered, and the answer was a refusal. */
+export class APIError extends GalileoError {
   readonly status: number;
   readonly type: string;
   readonly code: string;
@@ -28,7 +46,6 @@ export class GalileoError extends Error {
 
   constructor(init: ApiErrorInit) {
     super(init.message);
-    this.name = new.target.name;
     this.status = init.status;
     this.type = init.type;
     this.code = init.code;
@@ -37,18 +54,18 @@ export class GalileoError extends Error {
 }
 
 /** The request was wrong: bad body, unsupported codec, video too large. */
-export class InvalidRequestError extends GalileoError {}
+export class InvalidRequestError extends APIError {}
 
 /** The key is missing, malformed, or revoked. */
-export class AuthenticationError extends GalileoError {}
+export class AuthenticationError extends APIError {}
 
 /** No such evaluation or video, or not yours. */
-export class NotFoundError extends GalileoError {}
+export class NotFoundError extends APIError {}
 
 /**
  * Out of credits. Retrying cannot help; the balance has to change.
  */
-export class InsufficientCreditsError extends GalileoError {}
+export class InsufficientCreditsError extends APIError {}
 
 /**
  * Too many requests. Unlike the others this one clears by waiting, and
@@ -57,7 +74,7 @@ export class InsufficientCreditsError extends GalileoError {}
  * The client already waits and retries within its rate-limit budget, so seeing
  * this means the budget was exhausted rather than that nothing was tried.
  */
-export class RateLimitError extends GalileoError {
+export class RateLimitError extends APIError {
   readonly retryAfterMs: number | undefined;
 
   constructor(init: ApiErrorInit & { retryAfterMs?: number | undefined }) {
@@ -67,7 +84,7 @@ export class RateLimitError extends GalileoError {
 }
 
 /** Our fault: 5xx, or a model that answered unusably. */
-export class ServerError extends GalileoError {}
+export class ServerError extends APIError {}
 
 /**
  * The request never got an answer: DNS, TCP, TLS, a timeout, an aborted signal.
@@ -76,12 +93,11 @@ export class ServerError extends GalileoError {}
  * A 500 means the server received the request and may have acted on it; this
  * means we do not know whether it arrived at all.
  */
-export class ConnectionError extends Error {
+export class ConnectionError extends GalileoError {
   override readonly cause: unknown;
 
   constructor(message: string, cause?: unknown) {
     super(message);
-    this.name = "ConnectionError";
     this.cause = cause;
   }
 }
@@ -97,14 +113,9 @@ export class ConnectionError extends Error {
  * — it surfaces as `ConnectionError`, because a request that timed out may still
  * have been acted on. This is the Python client's name for the same class.
  */
-export class PollTimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PollTimeoutError";
-  }
-}
+export class PollTimeoutError extends GalileoError {}
 
-const BY_STATUS: Record<number, new (init: ApiErrorInit) => GalileoError> = {
+const BY_STATUS: Record<number, new (init: ApiErrorInit) => APIError> = {
   400: InvalidRequestError,
   401: AuthenticationError,
   403: AuthenticationError,
@@ -126,7 +137,7 @@ export function errorFromResponse(
   status: number,
   body: unknown,
   headers: Headers,
-): GalileoError {
+): APIError {
   const parsed = (body as { error?: Partial<ApiErrorBody> } | null)?.error;
   const init: ApiErrorInit = {
     status,

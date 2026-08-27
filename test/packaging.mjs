@@ -119,6 +119,7 @@ test("the two clients export the same error names", async () => {
     "ServerError",
     "ConnectionError",
     "PollTimeoutError",
+    "APIError",
   ]) {
     assert.equal(typeof mod[name], "function", `${name} is missing or is not a class`);
   }

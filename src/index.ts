@@ -17,6 +17,7 @@ export type { FetchLike } from "./internal/transport.js";
 
 export {
   GalileoError,
+  APIError,
   InvalidRequestError,
   AuthenticationError,
   NotFoundError,

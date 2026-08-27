@@ -43,3 +43,34 @@ test("the error classes are exported, because catching them is the point", () =>
   assert.equal(err.status, 401);
   assert.ok(err instanceof Error);
 });
+
+test("catching GalileoError catches the failures where the API never answered", async () => {
+  // This is a behavioural difference, not a naming one. `GalileoError` used to be
+  // the class carrying a status code, so `instanceof GalileoError` did NOT catch a
+  // connection failure — while the same line in Python did. A caller porting
+  // between the two would have silently lost a branch.
+  //
+  // Now: GalileoError is everything, APIError is "the server answered and said
+  // no", and only the second has a status.
+  const { GalileoError, APIError, ConnectionError, PollTimeoutError, ServerError } =
+    await import("../dist/index.js");
+
+  const connection = new ConnectionError("no route");
+  assert.ok(connection instanceof GalileoError, "a connection failure is a client error");
+  assert.equal(connection instanceof APIError, false, "but the API never answered, so no status");
+
+  const poll = new PollTimeoutError("gave up");
+  assert.ok(poll instanceof GalileoError);
+  assert.equal(poll instanceof APIError, false);
+
+  const server = new ServerError({ status: 500, type: "api_error", code: "internal", message: "boom" });
+  assert.ok(server instanceof APIError, "a 500 is the server answering");
+  assert.ok(server instanceof GalileoError);
+  assert.equal(server.status, 500);
+
+  // The names survive minification-free bundling, which is what a caller reads
+  // in a log.
+  assert.equal(connection.name, "ConnectionError");
+  assert.equal(poll.name, "PollTimeoutError");
+  assert.equal(server.name, "ServerError");
+});
