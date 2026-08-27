@@ -40,7 +40,7 @@
     "contract:check": "node scripts/check-contract.mjs",
     "build": "node scripts/sync-version.mjs && tsup",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm contract:check && pnpm build && node --test test/smoke.mjs test/transport.mjs test/upload.mjs test/packaging.mjs",
+    "test": "pnpm contract:check && pnpm build && node --test test/smoke.mjs test/transport.mjs test/upload.mjs test/packaging.mjs test/types.mjs",
     "prepack": "pnpm build",
     "test:e2e": "pnpm build && node --test test/e2e.mjs",
     "verify:live": "node scripts/verify-live.mjs",

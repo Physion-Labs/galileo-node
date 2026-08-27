@@ -31,7 +31,31 @@ type Schemas = components["schemas"];
 // --- Evaluations -----------------------------------------------------------
 
 export type Evaluation = Schemas["Evaluation"];
-export type EvaluationCreateParams = Schemas["EvaluationCreate"];
+/**
+ * What you may send to create a run.
+ *
+ * NOT `Schemas["EvaluationCreate"]` directly. A property carrying a `default` in
+ * the contract is one the caller MAY OMIT -- the server supplies the value --
+ * but openapi-typescript types a defaulted property as required. That is right
+ * for a response, where the default has already been applied by the time you
+ * read it, and wrong for a request body, where the default is the entire reason
+ * you can leave the field out.
+ *
+ * rc.3 shipped this way, so `glitch_types` was mandatory and the one-line
+ * example in our own README, quickstart and docs did not compile. Nothing
+ * failed: the contract check passes (the generated file IS what the contract
+ * generates), `tsc --noEmit` passes (no sample is compiled), and the packaging
+ * tests pass. It took compiling the documented examples against the published
+ * tarball to see it.
+ *
+ * Listed explicitly rather than blanket-`Partial`, so a field the contract
+ * really does require stays required. `test/types.mjs` derives the same set from
+ * the yaml and fails if this list drifts from it.
+ */
+type DefaultedByServer = "prompt" | "glitch_types";
+
+export type EvaluationCreateParams = Omit<Schemas["EvaluationCreate"], DefaultedByServer> &
+  Partial<Pick<Schemas["EvaluationCreate"], DefaultedByServer>>;
 export type EvaluationList = Schemas["EvaluationList"];
 export type EvaluationResult = Schemas["EvaluationResult"];
 export type EvaluationStatus = Schemas["EvaluationStatus"];
