@@ -1,0 +1,62 @@
+{
+  "name": "@physionlabs/galileo",
+  "version": "0.1.0",
+  "description": "Official Node.js and TypeScript client for the Galileo video evaluation API.",
+  "homepage": "https://github.com/Physion-Labs/galileo-node",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Physion-Labs/galileo-node.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Physion-Labs/galileo-node/issues"
+  },
+  "keywords": [
+    "galileo",
+    "physion",
+    "video",
+    "evaluation"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "contract:types": "openapi-typescript openapi/galileo-v1.yaml -o src/internal/contract.d.ts",
+    "contract:check": "node scripts/check-contract.mjs",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm contract:check && pnpm build && node --test test/*.mjs",
+    "prepack": "pnpm build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "openapi-typescript": "^7.9.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

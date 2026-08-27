@@ -1,0 +1,1089 @@
+openapi: 3.1.0
+info:
+  title: Galileo API
+  version: 0.1.0
+  summary: Evaluate generated videos with Galileo.
+  description: |
+    Submit generated videos for visual-glitch and prompt-misalignment analysis.
+    Evaluation jobs run asynchronously. Retrieve a job until its status reaches
+    `completed`, `partial`, or `failed`.
+  contact:
+    name: Physion Labs support
+    email: support@physionlabs.ai
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.physionlabs.ai
+    description: Production
+  - url: https://api-dev.physionlabs.ai
+    description: Development
+tags:
+  - name: Platform
+    description: Service health and account metadata.
+  - name: Evaluations
+    description: Submit videos and retrieve Galileo results.
+  - name: Videos
+    description: Upload a video once and reference it from evaluations.
+security:
+  - bearerAuth: []
+paths:
+  /v1/status:
+    get:
+      operationId: getStatus
+      summary: Get platform status
+      description: Returns the health of public Galileo services. Authentication is optional.
+      tags: [Platform]
+      security: []
+      responses:
+        "200":
+          description: Current platform status.
+          headers:
+            Cache-Control:
+              description: Public cache policy for this status snapshot.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatus"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/me:
+    get:
+      operationId: getAccount
+      summary: Get the current account
+      description: Verifies the API key and returns identity, credits, tier, and account limits.
+      tags: [Platform]
+      responses:
+        "200":
+          description: Current account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/models:
+    get:
+      operationId: listModels
+      summary: List available models
+      description: Returns the models and concrete builds offered by this deployment.
+      tags: [Platform]
+      responses:
+        "200":
+          description: Available models and builds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/quota:
+    get:
+      operationId: getQuota
+      summary: Get current quota
+      description: Returns the current sliding-window state for each metered operation.
+      tags: [Platform]
+      responses:
+        "200":
+          description: Current quota state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/credits:
+    get:
+      operationId: getCredits
+      summary: Get credit balance and pricing
+      description: Returns the account balance and the rate card used for evaluation pricing.
+      tags: [Platform]
+      responses:
+        "200":
+          description: Credit balance and pricing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Credits"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/evaluations:
+    post:
+      operationId: createEvaluation
+      summary: Create an evaluation
+      description: |
+        Queues a video for analysis and returns immediately. The response starts
+        in `queued` state. Retrieve it by ID until it reaches a terminal state.
+
+        The video may be at most 15 seconds and 50 MB, H.264/AVC in an MP4
+        container. The request body itself is capped at 2 MB, which only binds on
+        `b64_json` -- see `VideoRef`.
+      tags: [Evaluations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluationCreate"
+      responses:
+        "201":
+          description: Evaluation created.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Evaluation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/InsufficientCredits"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+    get:
+      operationId: listEvaluations
+      summary: List evaluations
+      description: Returns the caller's evaluations, newest first.
+      tags: [Evaluations]
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum evaluations to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: video_id
+          in: query
+          description: Return evaluations for one stored video.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Evaluation list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvaluationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+  /v1/evaluations/{evaluation_id}:
+    parameters:
+      - $ref: "#/components/parameters/EvaluationId"
+    get:
+      operationId: retrieveEvaluation
+      summary: Retrieve an evaluation
+      description: Returns the current job status and its result when available.
+      tags: [Evaluations]
+      responses:
+        "200":
+          description: Evaluation found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Evaluation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      operationId: deleteEvaluation
+      summary: Delete an evaluation
+      description: Deletes an evaluation owned by the caller.
+      tags: [Evaluations]
+      responses:
+        "204":
+          description: Evaluation deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/videos:
+    post:
+      operationId: createVideo
+      summary: Reserve an upload
+      description: |
+        First of the three calls that upload a video. Returns an `upload_path`
+        to send the bytes to, and the `video_id` you will reference from an
+        evaluation.
+
+        The whole sequence:
+
+        1. `POST /v1/videos` with the file's content type and size. You get back
+           a `video_id` and a short-lived `upload_path`.
+        2. `PUT` the raw bytes to `upload_path`. **Send no `Authorization`
+           header on this request** -- `upload_path` is on separate storage
+           infrastructure, not this API, and a key sent there is a key
+           disclosed to a third party. Declare `Content-Length`; a request that
+           does not is refused. The grant expires after 15 minutes, and a
+           replacement means starting again at step 1.
+        3. `POST /v1/videos/{video_id}/complete`, which hands the file to
+           validation. Poll `GET /v1/videos/{video_id}` until `status` is
+           `ready`; only then may an evaluation reference it.
+
+        Pass `content_hash` (SHA-256 of the bytes, hex) to skip the transfer
+        when we already hold that exact content: the response then carries
+        `skip_upload: true` and no `upload_path`, and the video is immediately
+        usable. Nothing is charged for the bytes you did not send.
+
+        This consumes an `upload` quota slot. A rejected content type or an
+        oversized `size_bytes` is refused before the slot is taken.
+      tags: [Videos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VideoCreate"
+      responses:
+        "201":
+          description: Upload reserved, or an existing copy matched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoReservation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/videos/{video_id}/complete:
+    parameters:
+      - $ref: "#/components/parameters/VideoId"
+    post:
+      operationId: completeVideo
+      summary: Finish an upload
+      description: |
+        Third of the three calls. Declares that the bytes have landed and hands
+        the file to validation, which checks the container and codec (H.264/AVC
+        in MP4) and the duration.
+
+        Validation is asynchronous: the status returned here is normally
+        `processing`. Poll `GET /v1/videos/{video_id}` for the outcome. Calling
+        this on a video that is already `ready` or `failed` is harmless and
+        changes nothing.
+      tags: [Videos]
+      responses:
+        "200":
+          description: Upload accepted for validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Video"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /v1/videos/{video_id}:
+    parameters:
+      - $ref: "#/components/parameters/VideoId"
+    get:
+      operationId: retrieveVideo
+      summary: Retrieve a video
+      description: >-
+        Returns the stored record and its validation status. `ready` means an
+        evaluation may reference it. `failed` means validation rejected the file
+        -- the container, the codec or the duration -- and carries no further
+        detail today, so re-check the file against the limits on
+        `POST /v1/evaluations` rather than expecting a reason here.
+      tags: [Videos]
+      responses:
+        "200":
+          description: Video found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Video"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Galileo API key
+      description: Use a key created in the Playground. Keys begin with `gk_`.
+  parameters:
+    VideoId:
+      name: video_id
+      in: path
+      required: true
+      description: Video identifier, as returned by `POST /v1/videos`.
+      schema:
+        type: string
+    EvaluationId:
+      name: evaluation_id
+      in: path
+      required: true
+      description: Evaluation identifier.
+      schema:
+        type: string
+        format: uuid
+  headers:
+    RateLimitLimit:
+      description: Maximum submissions in the current sliding window.
+      schema:
+        type: integer
+        minimum: 0
+    RateLimitRemaining:
+      description: Submissions available before the next refusal.
+      schema:
+        type: integer
+        minimum: 0
+    RateLimitReset:
+      description: Unix seconds when the next rate-limit slot becomes available.
+      schema:
+        type: integer
+        minimum: 0
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    BadRequest:
+      description: The request cannot be processed as sent.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: The API key is missing, invalid, or revoked.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InsufficientCredits:
+      description: The account balance cannot cover this evaluation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: The resource does not exist or is unavailable to this account.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateLimited:
+      description: The account reached a rate or concurrency limit.
+      headers:
+        X-RateLimit-Limit:
+          $ref: "#/components/headers/RateLimitLimit"
+        X-RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimitRemaining"
+        X-RateLimit-Reset:
+          $ref: "#/components/headers/RateLimitReset"
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalServerError:
+      description: The API encountered an unexpected error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadGateway:
+      description: A model service failed or returned an unusable response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    GatewayTimeout:
+      description: A model run exceeded its deadline.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotImplemented:
+      description: This deployment does not implement the requested operation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ModelId:
+      type: string
+      enum: [galileo, gemini]
+      default: galileo
+    GlitchType:
+      type: string
+      enum: [visual_glitch, prompt_misalignment]
+    EvaluationStatus:
+      type: string
+      enum: [queued, processing, completed, partial, failed]
+    DetectorStatus:
+      type: string
+      enum: [pending, reused, completed, failed, skipped]
+    VideoStatus:
+      type: string
+      enum: [pending, processing, ready, failed]
+    VideoCreate:
+      type: object
+      additionalProperties: false
+      required: [content_type, size_bytes]
+      properties:
+        content_type:
+          type: string
+          enum: [video/mp4]
+          description: Only MP4 is accepted.
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 52428800
+          description: >-
+            Exact size of the file you are about to send. It is signed into the
+            grant, so the storage endpoint refuses a body that exceeds it -- an
+            understated size fails the PUT rather than the reservation.
+        content_hash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >-
+            SHA-256 of the bytes, hex. Optional, and worth sending: when we
+            already hold this exact content the response says `skip_upload` and
+            there is nothing to transfer.
+        duration_sec:
+          type: number
+          exclusiveMinimum: 0
+          description: Optional metadata recorded on the video.
+        width:
+          type: integer
+          minimum: 1
+          description: Optional metadata recorded on the video.
+        height:
+          type: integer
+          minimum: 1
+          description: Optional metadata recorded on the video.
+    VideoReservation:
+      type: object
+      required: [video_id, cdn_url]
+      properties:
+        video_id:
+          type: string
+          description: >-
+            Reference this as the evaluation's `video.upload_id`, once the video
+            reaches `ready`.
+        cdn_url:
+          type: string
+          format: uri
+          description: Where the bytes will be readable once the upload completes.
+        upload_path:
+          type: string
+          description: >-
+            Where to PUT the bytes. A path or absolute URL on separate storage
+            infrastructure, valid for 15 minutes, carrying its own signed grant
+            -- send no `Authorization` header with it. Absent when
+            `skip_upload` is true.
+        skip_upload:
+          type: boolean
+          description: >-
+            Present and true when `content_hash` matched content we already
+            hold. Skip straight to referencing `video_id`: there is nothing to
+            upload and no completion call to make.
+    Video:
+      type: object
+      required: [id, status, cdn_url]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: video
+        status:
+          $ref: "#/components/schemas/VideoStatus"
+        cdn_url:
+          type: string
+          format: uri
+        duration_sec:
+          type: [number, "null"]
+        width:
+          type: [integer, "null"]
+        height:
+          type: [integer, "null"]
+        size_bytes:
+          type: [integer, "null"]
+        created:
+          type: integer
+          description: Unix seconds.
+    VideoUrlRef:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: "^https?://"
+          description: Public HTTP or HTTPS URL for an MP4 video.
+    VideoBase64Ref:
+      type: object
+      additionalProperties: false
+      required: [b64_json]
+      properties:
+        b64_json:
+          type: string
+          contentEncoding: base64
+          description: >-
+            Base64-encoded MP4 bytes, sent inline with the request.
+
+            Bounded by the 2 MB request body limit, not by the 50 MB file limit:
+            base64 costs a third more than the bytes it carries, so the largest
+            clip that fits inline is roughly 1.5 MB. That is well under a typical
+            15-second render. Use `url` for anything larger -- a body over the
+            limit is rejected with 413, which is a transport failure rather than
+            a validation one and so is not in this endpoint's error list.
+    VideoUploadRef:
+      type: object
+      additionalProperties: false
+      required: [upload_id]
+      properties:
+        upload_id:
+          type: string
+          description: >-
+            The `video_id` of a video you uploaded and whose status has reached
+            `ready`. See `POST /v1/videos`.
+    VideoRef:
+      description: >-
+        How to give us the video. Exactly one of the three, and the choice is
+        mostly about size.
+
+        `upload_id` is the general answer: upload the file first (three calls,
+        one of them straight to storage -- see `POST /v1/videos`) and reference
+        it here. It is the only option that both reaches the 50 MB file limit and
+        keeps the video private to your account.
+
+        `url` is the shortcut when the video is already hosted somewhere we can
+        GET. Note that it has to be publicly reachable; we send no credentials.
+
+        `b64_json` sends the bytes inline. Convenient for a small local file, but
+        bounded by the request body limit rather than the file limit -- see
+        `POST /v1/evaluations`.
+      oneOf:
+        - $ref: "#/components/schemas/VideoUrlRef"
+        - $ref: "#/components/schemas/VideoUploadRef"
+        - $ref: "#/components/schemas/VideoBase64Ref"
+    EvaluationCreate:
+      type: object
+      additionalProperties: false
+      required: [video]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelId"
+        model_version:
+          type: string
+          minLength: 1
+          description: Concrete model version to run. The deployment default applies when omitted.
+        prompt:
+          type: string
+          maxLength: 2500
+          default: ""
+          description: Required when prompt-misalignment detection runs.
+        video:
+          $ref: "#/components/schemas/VideoRef"
+        glitch_types:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          default: [visual_glitch, prompt_misalignment]
+          items:
+            $ref: "#/components/schemas/GlitchType"
+        metadata:
+          type: object
+          description: JSON metadata echoed on the evaluation. Serialized size must not exceed 8192 bytes.
+          additionalProperties: true
+      examples:
+        - model: galileo
+          prompt: A red ball rolls off a table and bounces twice.
+          video:
+            url: https://cdn.example.com/red-ball.mp4
+          metadata:
+            run_id: render-123
+    TimePoint:
+      type: object
+      required: [frame, sec, timecode]
+      properties:
+        frame:
+          type: integer
+          minimum: 0
+        sec:
+          type: number
+          minimum: 0
+        timecode:
+          type: string
+          pattern: "^[0-9]{2}:[0-9]{2}:[0-9]{2}:[0-9]{2}$"
+    BoundingBox:
+      type: object
+      required: [xmin, ymin, xmax, ymax]
+      properties:
+        xmin: { type: number, minimum: 0, maximum: 1 }
+        ymin: { type: number, minimum: 0, maximum: 1 }
+        xmax: { type: number, minimum: 0, maximum: 1 }
+        ymax: { type: number, minimum: 0, maximum: 1 }
+    BoxKeyframe:
+      type: object
+      required: [frame, sec, box]
+      properties:
+        frame: { type: integer, minimum: 0 }
+        sec: { type: number, minimum: 0 }
+        box:
+          $ref: "#/components/schemas/BoundingBox"
+    GlitchRegion:
+      type: object
+      required: [start, end, boxes]
+      properties:
+        start:
+          $ref: "#/components/schemas/TimePoint"
+        end:
+          $ref: "#/components/schemas/TimePoint"
+        boxes:
+          type: array
+          items:
+            $ref: "#/components/schemas/BoxKeyframe"
+    PromptSegment:
+      type: object
+      required: [text, char_start, char_end]
+      properties:
+        text: { type: string }
+        char_start: { type: integer, minimum: 0 }
+        char_end: { type: integer, minimum: 0 }
+    Glitch:
+      type: object
+      required: [id, type, description]
+      properties:
+        id: { type: string }
+        type:
+          $ref: "#/components/schemas/GlitchType"
+        description: { type: string }
+        prompt_segment:
+          $ref: "#/components/schemas/PromptSegment"
+        region:
+          $ref: "#/components/schemas/GlitchRegion"
+        source:
+          type: string
+          enum: [model, human]
+          description: >-
+            Who produced this finding. Absent means the model, which is the
+            common case -- the field is only set explicitly where a human
+            annotated something the model missed, so treat its absence as
+            `model` rather than as unknown.
+
+            Deliberately NOT declared with a `default`. A default reads to a
+            code generator as "the server always sends this", and it does not:
+            the value is omitted, not defaulted, and a generated type that made
+            it required would be wrong on almost every finding.
+        severity:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: >-
+            How far a prompt requirement was from being realized: `6 - score`,
+            so 1 is a minor mismatch and 5 means the requirement is absent
+            entirely. This is also the number the reporting threshold reads, so
+            a finding you receive is by definition one that cleared it.
+
+            In practice this is a `prompt_misalignment` field. The visual
+            detector does not score its findings, so a `visual_glitch` normally
+            has no `severity` at all; where one does appear it came from an
+            older pipeline and grades the defect rather than a requirement.
+            Either way it is optional — branch on `type` and handle its absence
+            rather than assuming a default.
+    EvaluationSummary:
+      type: object
+      required: [num_glitches, has_visual_glitch, has_prompt_misalignment]
+      properties:
+        num_glitches: { type: integer, minimum: 0 }
+        has_visual_glitch: { type: boolean }
+        has_prompt_misalignment: { type: boolean }
+    VideoInfo:
+      type: object
+      required: [duration_sec, width, height, fps, num_frames]
+      properties:
+        duration_sec: { type: number, minimum: 0 }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
+        fps: { type: number, exclusiveMinimum: 0 }
+        num_frames: { type: integer, minimum: 1 }
+    EvaluationUsage:
+      type: object
+      required: [video_seconds, billable_units]
+      properties:
+        video_seconds: { type: number, minimum: 0 }
+        billable_units: { type: number, minimum: 0 }
+    DetectorError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    DetectorState:
+      type: object
+      required: [detector, status]
+      properties:
+        detector:
+          $ref: "#/components/schemas/GlitchType"
+        status:
+          $ref: "#/components/schemas/DetectorStatus"
+        error:
+          $ref: "#/components/schemas/DetectorError"
+    EvaluationResult:
+      type: object
+      required: [glitches, summary]
+      properties:
+        glitches:
+          type: array
+          items:
+            $ref: "#/components/schemas/Glitch"
+        summary:
+          $ref: "#/components/schemas/EvaluationSummary"
+    EvaluationFailure:
+      type: object
+      required: [type, code, message, request_id]
+      properties:
+        type: { type: string }
+        code: { type: string }
+        message: { type: string }
+        request_id: { type: string }
+    Evaluation:
+      type: object
+      required:
+        - id
+        - object
+        - model
+        - model_version
+        - output_schema_version
+        - created
+        - status
+        - input
+        - usage
+        - result
+        - error
+      properties:
+        id:
+          type: string
+          format: uuid
+        object:
+          type: string
+          const: evaluation
+        model:
+          $ref: "#/components/schemas/ModelId"
+        model_version: { type: string }
+        output_schema_version: { type: string }
+        created:
+          type: integer
+          minimum: 0
+          description: Unix timestamp in seconds.
+        status:
+          $ref: "#/components/schemas/EvaluationStatus"
+        input:
+          type: object
+          required: [prompt, video]
+          properties:
+            prompt: { type: string }
+            video:
+              $ref: "#/components/schemas/VideoInfo"
+        usage:
+          $ref: "#/components/schemas/EvaluationUsage"
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/EvaluationResult"
+            - type: "null"
+        error:
+          oneOf:
+            - $ref: "#/components/schemas/EvaluationFailure"
+            - type: "null"
+        detectors:
+          type: array
+          description: Per-detector state. Older evaluations may omit this field.
+          items:
+            $ref: "#/components/schemas/DetectorState"
+        video_id:
+          type:
+            - string
+            - "null"
+          description: Stored video identifier when the evaluation used an uploaded video.
+        metadata:
+          type: object
+          additionalProperties: true
+    EvaluationList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Evaluation"
+    RateLimitWindow:
+      type: object
+      required: [limit, used, remaining, reset_at, reset_in_sec, window_sec, unlimited]
+      properties:
+        limit: { type: integer, minimum: 0 }
+        used: { type: integer, minimum: 0 }
+        remaining: { type: integer, minimum: 0 }
+        reset_at:
+          type: [integer, "null"]
+          minimum: 0
+        reset_in_sec:
+          type: [integer, "null"]
+          minimum: 0
+        window_sec: { type: integer, minimum: 1 }
+        unlimited: { type: boolean }
+    QuotaScopes:
+      type: object
+      required: [detect, generate, upload]
+      properties:
+        detect:
+          $ref: "#/components/schemas/RateLimitWindow"
+        generate:
+          $ref: "#/components/schemas/RateLimitWindow"
+        upload:
+          $ref: "#/components/schemas/RateLimitWindow"
+    QuotaReport:
+      allOf:
+        - $ref: "#/components/schemas/RateLimitWindow"
+        - type: object
+          required: [scopes]
+          properties:
+            scopes:
+              $ref: "#/components/schemas/QuotaScopes"
+    AccountLimits:
+      type: object
+      required: [requests_per_min, window_sec, max_concurrent_jobs, rate_limits]
+      properties:
+        requests_per_min: { type: integer, minimum: 0 }
+        window_sec: { type: integer, minimum: 1 }
+        max_concurrent_jobs: { type: integer, minimum: 1 }
+        rate_limits:
+          type: object
+          required: [detect, generate, upload]
+          properties:
+            detect:
+              $ref: "#/components/schemas/RateLimitDefinition"
+            generate:
+              $ref: "#/components/schemas/RateLimitDefinition"
+            upload:
+              $ref: "#/components/schemas/RateLimitDefinition"
+    RateLimitDefinition:
+      type: object
+      required: [max, window_sec]
+      properties:
+        max: { type: integer, minimum: 0 }
+        window_sec: { type: integer, minimum: 1 }
+    ApiKeySummary:
+      type: object
+      required: [name, prefix, last4]
+      properties:
+        name: { type: string }
+        prefix: { type: string }
+        last4: { type: string }
+    Account:
+      type: object
+      required: [object, id, email, name, tier, credits, unlimited, limits]
+      properties:
+        object:
+          type: string
+          const: user
+        id: { type: [string, "null"] }
+        email: { type: [string, "null"], format: email }
+        name: { type: [string, "null"] }
+        tier: { type: string }
+        credits: { type: number }
+        unlimited: { type: boolean }
+        limits:
+          $ref: "#/components/schemas/AccountLimits"
+        api_key:
+          $ref: "#/components/schemas/ApiKeySummary"
+    ModelBuild:
+      type: object
+      required: [id, label, version]
+      properties:
+        id:
+          $ref: "#/components/schemas/ModelId"
+        label: { type: string }
+        version: { type: string }
+        note: { type: string }
+    Model:
+      type: object
+      required: [id, object, version, detectors, input]
+      properties:
+        id:
+          $ref: "#/components/schemas/ModelId"
+        object:
+          type: string
+          const: model
+        version: { type: string }
+        detectors:
+          type: array
+          items:
+            $ref: "#/components/schemas/GlitchType"
+        input:
+          type: object
+          required: [formats, max_duration_sec, max_file_bytes, aspect_ratios]
+          properties:
+            formats:
+              type: array
+              items: { type: string }
+            max_duration_sec: { type: number, minimum: 0 }
+            max_file_bytes: { type: integer, minimum: 1 }
+            aspect_ratios:
+              type: array
+              items: { type: string }
+    ModelList:
+      type: object
+      required: [object, builds, default_build, data]
+      properties:
+        object:
+          type: string
+          const: list
+        builds:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelBuild"
+        default_build: { type: string }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+    PricingRates:
+      type: object
+      required: [per_second_per_detector, cache_hit_rate, minimum, assumed_duration_sec]
+      properties:
+        per_second_per_detector: { type: number, minimum: 0 }
+        per_second_by_detector:
+          type: object
+          properties:
+            visual_glitch: { type: number, minimum: 0 }
+            prompt_misalignment: { type: number, minimum: 0 }
+        cache_hit_rate: { type: number, minimum: 0 }
+        minimum: { type: number, minimum: 0 }
+        assumed_duration_sec: { type: number, minimum: 0 }
+        generation_from_catalog: { type: boolean }
+    Credits:
+      type: object
+      required: [credits, pricing, unlimited, per_generated_sec]
+      properties:
+        credits: { type: number }
+        pricing:
+          $ref: "#/components/schemas/PricingRates"
+        unlimited: { type: boolean }
+        per_generated_sec: { type: number, minimum: 0 }
+    ComponentState:
+      type: string
+      enum: [operational, degraded, down, unknown]
+    ComponentStatus:
+      type: object
+      required: [key, name, description, state, detail, latency_ms]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        description: { type: string }
+        state:
+          $ref: "#/components/schemas/ComponentState"
+        detail: { type: string }
+        latency_ms: { type: [number, "null"], minimum: 0 }
+    SystemStatus:
+      type: object
+      required: [state, checked_at, components]
+      properties:
+        state:
+          $ref: "#/components/schemas/ComponentState"
+        checked_at:
+          type: integer
+          minimum: 0
+        components:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComponentStatus"
+    ErrorType:
+      type: string
+      enum: [invalid_request_error, authentication_error, rate_limit_error, api_error]
+    ErrorCode:
+      type: string
+      enum:
+        - invalid_body
+        - unknown_model
+        - missing_video
+        - missing_prompt
+        - prompt_too_long
+        - invalid_glitch_types
+        - video_too_long
+        - invalid_video
+        - not_found
+        - not_implemented
+        - insufficient_credits
+        - missing_api_key
+        - invalid_api_key
+        - unauthenticated
+        - rate_limited
+        - concurrency_limit
+        - internal_error
+        - model_unavailable
+        - model_output_invalid
+        - model_timeout
+        - run_abandoned
+    Error:
+      type: object
+      required: [type, code, message, request_id]
+      properties:
+        type:
+          $ref: "#/components/schemas/ErrorType"
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message: { type: string }
+        request_id: { type: string }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/Error"
+        quota:
+          $ref: "#/components/schemas/RateLimitWindow"

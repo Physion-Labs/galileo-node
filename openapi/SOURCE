@@ -1,0 +1,17 @@
+# Where this copy of the contract came from.
+#
+# The contract is authored in the private PhysionWebapps repo, which also runs
+# the service it describes -- so that is the only place it can be kept true. This
+# repo holds a copy because a public repo cannot submodule a private one without
+# breaking every outside clone and CI run.
+#
+# A copy needs provenance or it becomes folklore. These three lines say exactly
+# which upstream revision this file is, so a human syncing it can see at a glance
+# whether they are behind. scripts/check-contract.mjs verifies the hash still
+# matches, which catches the copy being edited here instead of upstream -- the
+# one change that would make the two silently disagree.
+
+repo   = Physion-Labs/PhysionWebapps
+commit = c1b918fd86b1aed59620385be84351cf6529b839
+path   = openapi/galileo-v1.yaml
+sha256 = 056d72d2227e3b83986114b36fbfb90481bd03d1d5c224d2c7fabcbbee243c94
