@@ -164,3 +164,16 @@ test("the two clients export the same error names", async () => {
   }
   assert.equal(mod.TimeoutError, undefined, "the old name should not linger as an alias");
 });
+
+test("the README does not claim the package is unpublished", () => {
+  // The README ships inside the tarball and is what npm renders on the package
+  // page, so a "not published yet" line is read by everyone who arrives at a
+  // published package. It stayed there through the first two releases.
+  const readme = read("README.md");
+  for (const stale of ["Not published yet", "does not exist on npm", "under construction"]) {
+    assert.equal(readme.includes(stale), false, `README still says "${stale}"`);
+  }
+  // And it must still say what it IS, so removing the claim does not mean
+  // removing the caveat.
+  assert.match(readme, /Release candidate|not final until/);
+});

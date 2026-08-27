@@ -2,8 +2,8 @@
 
 Official Node.js and TypeScript client for the Galileo video evaluation API.
 
-> **Not published yet.** This repository is under construction; the package does
-> not exist on npm and the API surface below is not final.
+> **Release candidate.** `npm install @physionlabs/galileo` resolves it. The API
+> below is not final until 0.1.0, and this notice is what will change when it is.
 
 ## What Galileo does
 
