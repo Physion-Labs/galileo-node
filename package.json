@@ -1,6 +1,6 @@
 {
   "name": "@physionlabs/galileo",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Official Node.js and TypeScript client for the Galileo video evaluation API.",
   "homepage": "https://github.com/Physion-Labs/galileo-node",
   "repository": {
