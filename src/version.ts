@@ -4,4 +4,4 @@
 // package.json deliberately does not expose the manifest — so a caller cannot
 // read the version that way, and neither can this file. The Python client has
 // `__version__` for the same reason and this is its counterpart.
-export const VERSION = "0.1.0-rc.2";
+export const VERSION = "0.1.0-rc.3";
