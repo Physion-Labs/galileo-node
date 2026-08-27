@@ -407,8 +407,16 @@ export interface components {
             id: string;
             type: components["schemas"]["GlitchType"];
             description: string;
-            prompt_segment?: components["schemas"]["PromptSegment"];
-            region?: components["schemas"]["GlitchRegion"];
+            /**
+             * @description The prompt span this finding is about. `prompt_misalignment` only.
+             *     NULL, not absent, on a `visual_glitch`. The service sends the key with a null value rather than omitting it, and this schema says so because a contract that quietly disagreed with the wire would be worse than an ugly one. Check for a value, not for the key.
+             */
+            prompt_segment?: components["schemas"]["PromptSegment"] | null;
+            /**
+             * @description Where in the video this finding is. Public for `visual_glitch`.
+             *     NULL on a `prompt_misalignment`: the service produces one but it is not stable enough to publish, so it is withheld — as a null value, not an absent key.
+             */
+            region?: components["schemas"]["GlitchRegion"] | null;
             /**
              * @description Who produced this finding. Absent means the model, which is the common case -- the field is only set explicitly where a human annotated something the model missed, so treat its absence as `model` rather than as unknown.
              *     Deliberately NOT declared with a `default`. A default reads to a code generator as "the server always sends this", and it does not: the value is omitted, not defaulted, and a generated type that made it required would be wrong on almost every finding.
@@ -416,10 +424,11 @@ export interface components {
              */
             source?: "model" | "human";
             /**
-             * @description How far a prompt requirement was from being realized: `6 - score`, so 1 is a minor mismatch and 5 means the requirement is absent entirely. This is also the number the reporting threshold reads, so a finding you receive is by definition one that cleared it.
+             * @description NULL on a `visual_glitch` -- the key is sent with a null value rather than omitted, so test the value.
+             *     How far a prompt requirement was from being realized: `6 - score`, so 1 is a minor mismatch and 5 means the requirement is absent entirely. This is also the number the reporting threshold reads, so a finding you receive is by definition one that cleared it.
              *     In practice this is a `prompt_misalignment` field. The visual detector does not score its findings, so a `visual_glitch` normally has no `severity` at all; where one does appear it came from an older pipeline and grades the defect rather than a requirement. Either way it is optional — branch on `type` and handle its absence rather than assuming a default.
              */
-            severity?: number;
+            severity?: number | null;
         };
         EvaluationSummary: {
             num_glitches: number;
