@@ -7,7 +7,8 @@
  * re-exported from `types.ts` under a name a caller should see.
  */
 
-export { Galileo, type GalileoOptions } from "./client.js";
+export { Galileo, DEFAULT_BASE_URL, type GalileoOptions } from "./client.js";
+export { VERSION } from "./version.js";
 export { Galileo as default } from "./client.js";
 
 export type { UploadParams } from "./resources/videos.js";

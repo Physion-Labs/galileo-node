@@ -90,7 +90,7 @@ test("`files` publishes the built output and nothing else", () => {
   }
 });
 
-test("the package is publishable as a public scoped package with provenance", () => {
+test("the package is publishable as a public scoped package", () => {
   const pkg = JSON.parse(read("package.json"));
   assert.equal(pkg.name, "@physionlabs/galileo");
   // A scoped package defaults to restricted; without this the first publish
@@ -109,6 +109,34 @@ test("the package is publishable as a public scoped package with provenance", ()
   assert.equal(pkg.publishConfig.provenance, undefined,
     "provenance in publishConfig breaks any publish outside CI");
   assert.equal(pkg.private, undefined, "a private package cannot be published at all");
+});
+
+test("the two clients export the same module-level constants", async () => {
+  // THIS TEST EXISTS BECAUSE ITS ABSENCE HID A BUG. The parity check below
+  // compared resources, methods and error classes, concluded "identical", and
+  // said nothing about constants — so `DEFAULT_BASE_URL` shipped in the Python
+  // client and not in this one, and the first person to ask "which backend does
+  // the SDK point at?" got `undefined` from the published package.
+  //
+  // Mirrors the non-class, non-type entries of physionlabs/__init__.py's
+  // `__all__`. Types are excluded on purpose: TypeScript erases them, so a type
+  // Python exposes as a runtime pydantic class has no runtime counterpart here
+  // and its absence from this object is not a gap.
+  const mod = await import("../dist/index.js");
+
+  assert.equal(typeof mod.DEFAULT_BASE_URL, "string");
+  assert.equal(mod.DEFAULT_BASE_URL, "https://api.physionlabs.ai",
+    "the shipped default is PRODUCTION — only the test suites default to dev");
+  assert.match(mod.VERSION, /^\d+\.\d+\.\d+/, "VERSION is Python's __version__");
+});
+
+test("VERSION cannot drift from package.json", async () => {
+  // It is a copy, because `exports` deliberately does not expose the manifest —
+  // so nothing can read the version at runtime, including the package itself.
+  // A copy that nothing checks is a package that misreports its own version.
+  const pkg = JSON.parse(read("package.json"));
+  const mod = await import("../dist/index.js");
+  assert.equal(mod.VERSION, pkg.version);
 });
 
 test("the two clients export the same error names", async () => {

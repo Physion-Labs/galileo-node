@@ -9,7 +9,19 @@ import { Evaluations } from "./resources/evaluations.js";
 import { Videos } from "./resources/videos.js";
 import { AccountResource } from "./resources/account.js";
 
-const DEFAULT_BASE_URL = "https://api.physionlabs.ai";
+/**
+ * Where the client talks unless told otherwise: PRODUCTION.
+ *
+ * Exported because a caller who overrides `baseURL` for a staging run wants to
+ * put it back, and because it is worth being able to read what the default is
+ * rather than infer it. The Python client exports the same constant under the
+ * same name.
+ *
+ * Note that the TEST suites here default to the development deployment instead —
+ * see test/e2e.mjs. That asymmetry is deliberate: nobody should spend production
+ * credits by running a test.
+ */
+export const DEFAULT_BASE_URL = "https://api.physionlabs.ai";
 
 export interface GalileoOptions {
   /**
