@@ -32,6 +32,17 @@ export interface TransportOptions {
    */
   rateLimitBudgetMs?: number;
   /**
+   * How many 429s one request will absorb before giving up. Default 20.
+   *
+   * A budget measured in SLEEP does not bound anything when the sleeps are zero.
+   * `Retry-After: 0` is a legal answer — and a proxy or a misconfigured limiter
+   * can return it indefinitely — so a loop guarded only by
+   * `rateLimitBudgetMs` spins as fast as the network allows, forever, even with
+   * the budget set to 0. Two independent bounds close that: this count, and a
+   * wall-clock deadline taken from the first attempt.
+   */
+  maxRateLimitRetries?: number;
+  /**
    * Requests allowed in flight at once. Default 4.
    *
    * Node has no built-in for this, and the alternative is worse than it looks:
@@ -120,6 +131,7 @@ export class Transport {
   readonly #timeoutMs: number;
   readonly #maxRetries: number;
   readonly #rateLimitBudgetMs: number;
+  readonly #maxRateLimitRetries: number;
   readonly #fetch: FetchLike;
   readonly #gate: Gate;
 
@@ -129,6 +141,7 @@ export class Transport {
     this.#timeoutMs = opts.timeoutMs ?? 60_000;
     this.#maxRetries = opts.maxRetries ?? 2;
     this.#rateLimitBudgetMs = opts.rateLimitBudgetMs ?? 60_000;
+    this.#maxRateLimitRetries = opts.maxRateLimitRetries ?? 20;
     this.#gate = new Gate(opts.maxConcurrency ?? 4);
     const impl = opts.fetch ?? (globalThis.fetch as FetchLike | undefined);
     if (!impl) {
@@ -158,7 +171,12 @@ export class Transport {
     const url = this.#url(spec);
     const maxRetries = spec.maxRetries ?? this.#maxRetries;
     let rateLimitSpent = 0;
+    let rateLimited = 0;
     let attempt = 0;
+    // Taken before the first attempt, so a stream of `Retry-After: 0` cannot
+    // outlast it. `rateLimitSpent` alone cannot: it only grows when the server
+    // asks us to wait, and zero is a legal thing to be asked.
+    const rateLimitDeadline = Date.now() + this.#rateLimitBudgetMs;
 
     for (;;) {
       const { signal, done } = withTimeout(this.#timeoutMs, spec.signal);
@@ -183,9 +201,18 @@ export class Transport {
       // the attempts reserved for failures that might not repeat.
       if (res.status === 429) {
         const wait = retryAfterMs(res.headers) ?? backoffMs(attempt + 1);
-        if (rateLimitSpent + wait <= this.#rateLimitBudgetMs) {
+        // Three bounds, and each closes a hole the others leave open:
+        //   · the count stops a `Retry-After: 0` loop, where no time is spent;
+        //   · the deadline stops many small waits from adding up past the budget
+        //     in wall-clock terms;
+        //   · the budget stops one enormous `Retry-After` from being honoured.
+        const withinCount = rateLimited < this.#maxRateLimitRetries;
+        const withinDeadline = Date.now() + wait <= rateLimitDeadline;
+        const withinBudget = rateLimitSpent + wait <= this.#rateLimitBudgetMs;
+        if (withinCount && withinDeadline && withinBudget) {
+          rateLimited++;
           rateLimitSpent += wait;
-          await sleep(wait);
+          if (wait > 0) await sleep(wait);
           continue;
         }
         throw await asError(res);

@@ -24,7 +24,7 @@ export {
   RateLimitError,
   ServerError,
   ConnectionError,
-  TimeoutError,
+  PollTimeoutError,
 } from "./errors.js";
 
 export type * from "./types.js";

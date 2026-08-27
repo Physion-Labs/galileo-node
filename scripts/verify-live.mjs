@@ -95,9 +95,11 @@ const cases = [
 console.log(`Contract: openapi/galileo-v1.yaml\nAgainst:  ${BASE_URL}\n`);
 
 let failures = 0;
+let skipped = 0;
 for (const c of cases) {
   if (c.auth !== false && !API_KEY) {
-    console.log(`  ~ ${c.path}  skipped (no GALILEO_API_KEY)`);
+    console.log(`  ~ ${c.path}  SKIPPED (no GALILEO_API_KEY)`);
+    skipped++;
     continue;
   }
   let body;
@@ -142,5 +144,20 @@ if (API_KEY) {
   }
 }
 
-console.log(failures ? `\n${failures} mismatch(es).` : "\nThe contract matches the live service.");
-process.exit(failures ? 1 : 0);
+// A check that says "verified" when it verified almost nothing is worse than no
+// check: it turns an unverified contract into a green tick. Only ONE of these
+// cases needs no credential, so without a key this script has looked at the
+// simplest endpoint in the API and nothing else.
+if (failures) {
+  console.log(`\n${failures} mismatch(es).`);
+  process.exit(1);
+}
+if (skipped) {
+  console.log(
+    `\nINCOMPLETE — ${cases.length - skipped} of ${cases.length} endpoints checked, ${skipped} skipped ` +
+      `for want of GALILEO_API_KEY.\nThe endpoints that carry the interesting half of the contract ` +
+      `(evaluations, models, quota) were NOT verified.`,
+  );
+  process.exit(2);
+}
+console.log("\nThe contract matches the live service.");

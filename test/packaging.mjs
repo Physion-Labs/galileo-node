@@ -99,3 +99,28 @@ test("the package is publishable as a public scoped package with provenance", ()
   assert.equal(pkg.publishConfig.provenance, true);
   assert.equal(pkg.private, undefined, "a private package cannot be published at all");
 });
+
+test("the two clients export the same error names", async () => {
+  // The Node and Python clients are one API with two front doors, and a caller
+  // porting between them should not have to learn different exception names for
+  // the same condition. Checked here because a rename is easy and silent: the
+  // first version of this package called the poll timeout `TimeoutError`, which
+  // Python did not, and nothing noticed until a smoke test reached for the wrong
+  // one.
+  const mod = await import("../dist/index.js");
+  // Mirrors `__all__` in physionlabs/__init__.py.
+  for (const name of [
+    "GalileoError",
+    "InvalidRequestError",
+    "AuthenticationError",
+    "NotFoundError",
+    "InsufficientCreditsError",
+    "RateLimitError",
+    "ServerError",
+    "ConnectionError",
+    "PollTimeoutError",
+  ]) {
+    assert.equal(typeof mod[name], "function", `${name} is missing or is not a class`);
+  }
+  assert.equal(mod.TimeoutError, undefined, "the old name should not linger as an alias");
+});

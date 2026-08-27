@@ -177,11 +177,39 @@ paths:
             minimum: 1
             maximum: 100
             default: 20
+        - name: offset
+          in: query
+          description: >-
+            How many to skip before the page starts. With `limit` this addresses
+            a page directly -- `limit=20&offset=40` is the third page.
+
+            The 100-item `limit` bounds one response, not what exists: a caller
+            asking for 500 gets 100, and the hundred-and-first evaluation is one
+            more request away rather than unreachable.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
         - name: video_id
           in: query
           description: Return evaluations for one stored video.
           schema:
             type: string
+        - name: status
+          in: query
+          description: >-
+            Keep only these statuses. Comma-joined (`?status=failed,partial`) or
+            repeated (`?status=failed&status=partial`); both are accepted.
+
+            Filtered before paging, so `counts` and the page boundaries describe
+            the same filtered set. An unrecognised value is dropped rather than
+            refused -- a stale bookmark should return an empty list, not an
+            error.
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/EvaluationStatus"
       responses:
         "200":
           description: Evaluation list.
@@ -230,6 +258,65 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalServerError"
+  /v1/evaluations/{evaluation_id}/retry:
+    parameters:
+      - $ref: "#/components/parameters/EvaluationId"
+    post:
+      operationId: retryEvaluation
+      summary: Run a failed evaluation again
+      description: |
+        Re-files a failed run's own request and returns the NEW evaluation, in
+        `queued`. The original is left alone, with `retried_by` pointing at the
+        successor — the failure stays on the record, because `error.code` is the
+        only thing that can answer whether retrying was worth it.
+
+        **This is the one submission in this API that is idempotent**, and it is
+        idempotent on the run being retried rather than on your request. A burst
+        of presses picks exactly one winner; every other press is handed that same
+        winner. `POST /v1/evaluations` has no such guarantee — see its
+        description.
+
+        **It costs the ordinary price, and that is not paying twice.** A run that
+        failed was refunded when it settled: in full on `failed`, and on `partial`
+        exactly the detectors that did not land. The detectors that DID land were
+        cached at the same moment, so the retry pays for the missing legs and gets
+        the rest from cache. It consumes a `detect` rate-limit slot like any
+        submission.
+
+        Refused with `400` when there is nothing to retry, and the message says
+        which case it is: the run has not finished, it did not fail, it delivered
+        every detector it was asked for, it analyzed no stored clip (submit it
+        fresh instead), it has already been attempted too many times, or it was
+        already retried and that retry has since been deleted.
+      tags: [Evaluations]
+      responses:
+        "201":
+          description: A new evaluation, queued.
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Evaluation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/InsufficientCredits"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "501":
+          $ref: "#/components/responses/NotImplemented"
   /v1/videos:
     post:
       operationId: createVideo
@@ -867,6 +954,25 @@ components:
             - string
             - "null"
           description: Stored video identifier when the evaluation used an uploaded video.
+        attempt:
+          type: integer
+          minimum: 1
+          description: >-
+            Which try this is. 1 for a run submitted directly; 2 or more for one
+            produced by `POST /v1/evaluations/{evaluation_id}/retry`. There is a
+            ceiling, so a clip that keeps failing under the same instructions
+            stops being retryable rather than being retried forever.
+        retry_of:
+          type: [string, "null"]
+          description: The failed evaluation this one was filed to replace, if any.
+        retried_by:
+          type: [string, "null"]
+          description: >-
+            The evaluation filed to replace this one, if it has been retried.
+
+            Set at most once, which is what makes retrying idempotent: a burst of
+            presses claims this field exactly once, and every press that loses the
+            race is handed the winner.
         metadata:
           type: [object, "null"]
           additionalProperties: true
@@ -878,6 +984,25 @@ components:
             Only found by submitting through the API. Every evaluation created in
             the console carries metadata, so a contract checked against console
             traffic alone looked correct here.
+    EvaluationCounts:
+      type: object
+      description: >-
+        How many evaluations exist in each status, over the same owner and video
+        scope as the request and deliberately IGNORING `limit`, `offset` and
+        `status`.
+
+        This is what a pager needs. Inferring the end of a list from "was the
+        page full" is wrong at exactly the boundary paging exists to make honest,
+        and a bare total could not tell you the page count for a filtered view.
+      additionalProperties:
+        type: integer
+        minimum: 0
+      properties:
+        queued: { type: integer, minimum: 0 }
+        processing: { type: integer, minimum: 0 }
+        completed: { type: integer, minimum: 0 }
+        partial: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
     EvaluationList:
       type: object
       required: [object, data]
@@ -889,6 +1014,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Evaluation"
+        counts:
+          $ref: "#/components/schemas/EvaluationCounts"
     RateLimitWindow:
       type: object
       required: [limit, used, remaining, reset_at, reset_in_sec, window_sec, unlimited]
@@ -976,7 +1103,17 @@ components:
         id:
           $ref: "#/components/schemas/ModelId"
         label: { type: string }
-        version: { type: string }
+        version:
+          type: [string, "null"]
+          description: >-
+            The build the model runs, or NULL when that is not ours to state.
+
+            Null is the current answer for `galileo` and will stay so while it is
+            the default: the version belongs to the cluster serving it, and
+            answering from our side would mean publishing a number nobody checked.
+            Nothing keys a run on this -- an evaluation carries its own
+            `model_version`, taken from the submission that resolved it, and that
+            is the one to read.
         note: { type: string }
     Model:
       type: object
@@ -987,7 +1124,17 @@ components:
         object:
           type: string
           const: model
-        version: { type: string }
+        version:
+          type: [string, "null"]
+          description: >-
+            The build the model runs, or NULL when that is not ours to state.
+
+            Null is the current answer for `galileo` and will stay so while it is
+            the default: the version belongs to the cluster serving it, and
+            answering from our side would mean publishing a number nobody checked.
+            Nothing keys a run on this -- an evaluation carries its own
+            `model_version`, taken from the submission that resolved it, and that
+            is the one to read.
         detectors:
           type: array
           items:
@@ -1015,7 +1162,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ModelBuild"
-        default_build: { type: string }
+        default_build:
+          type: [string, "null"]
+          description: >-
+            The build an evaluation gets when it names no `model_version`, or
+            NULL when that is the cluster's to state — see `Model.version`.
+            Describes the deployment; it is not what a run is filed under.
         data:
           type: array
           items:

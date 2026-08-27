@@ -86,11 +86,21 @@ export class ConnectionError extends Error {
   }
 }
 
-/** A poll that ran out of patience before the evaluation settled. */
-export class TimeoutError extends Error {
+/**
+ * A poll that ran out of patience before the evaluation settled.
+ *
+ * The job is still running — retrieve it again later rather than resubmitting,
+ * since a second submission is a second charge.
+ *
+ * Named for polling rather than `TimeoutError`, for two reasons: `TimeoutError`
+ * is also a DOM global, and a request-level timeout does not arrive here at all
+ * — it surfaces as `ConnectionError`, because a request that timed out may still
+ * have been acted on. This is the Python client's name for the same class.
+ */
+export class PollTimeoutError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "TimeoutError";
+    this.name = "PollTimeoutError";
   }
 }
 

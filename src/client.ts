@@ -36,6 +36,13 @@ export interface GalileoOptions {
   maxRetries?: number;
   /** Total time to spend waiting out rate limits, per request. Default 60000. */
   rateLimitBudgetMs?: number;
+  /**
+   * How many 429s one request will absorb. Default 20.
+   *
+   * Separate from `rateLimitBudgetMs` because a budget measured in sleep bounds
+   * nothing when the server answers `Retry-After: 0`.
+   */
+  maxRateLimitRetries?: number;
   /** Requests in flight at once. Default 4. */
   maxConcurrency?: number;
   /** Override for tests, or an unusual runtime. */
@@ -62,6 +69,9 @@ export class Galileo {
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
       ...(opts.rateLimitBudgetMs !== undefined ? { rateLimitBudgetMs: opts.rateLimitBudgetMs } : {}),
+      ...(opts.maxRateLimitRetries !== undefined
+        ? { maxRateLimitRetries: opts.maxRateLimitRetries }
+        : {}),
       ...(opts.maxConcurrency !== undefined ? { maxConcurrency: opts.maxConcurrency } : {}),
       ...(opts.fetch !== undefined ? { fetch: opts.fetch } : {}),
     });

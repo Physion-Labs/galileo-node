@@ -40,5 +40,44 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:e2e
-      - run: pnpm verify:live
+
+      # Named at the JOB level so a missing key is visible in the run list rather
+      # than only in a log nobody opens. Without it the only endpoint either step
+      # can reach is /v1/status, and a green tick would then mean "the simplest
+      # endpoint in the API still answers" while reading as "the contract holds".
+      - name: Is there a key to verify with?
+        id: key
+        env:
+          GALILEO_API_KEY: ${{ secrets.GALILEO_CI_API_KEY }}
+        run: |
+          if [ -n "$GALILEO_API_KEY" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Live verification incomplete::GALILEO_CI_API_KEY is not set.           Only /v1/status was checked; evaluations, models and quota were not."
+          fi
+
+      - name: e2e against the development deployment
+        env:
+          GALILEO_API_KEY: ${{ secrets.GALILEO_CI_API_KEY }}
+          GALILEO_BASE_URL: https://api-dev.physionlabs.ai
+        run: pnpm test:e2e
+
+      # Exit 2 is this script's "INCOMPLETE" — endpoints skipped for want of a
+      # key. Distinguished from exit 1, a real mismatch, because the two mean
+      # opposite things about the contract and only one of them is a finding.
+      - name: Contract against the live service
+        env:
+          GALILEO_API_KEY: ${{ secrets.GALILEO_CI_API_KEY }}
+          GALILEO_BASE_URL: https://api-dev.physionlabs.ai
+        run: |
+          set +e
+          pnpm verify:live
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "::notice title=Contract verified::Every endpoint matched." ;;
+            2) echo "::warning title=Contract NOT verified::Skipped for want of GALILEO_CI_API_KEY." ;;
+            *) echo "::error title=Contract mismatch::The live service does not match the contract."
+               exit 1 ;;
+          esac

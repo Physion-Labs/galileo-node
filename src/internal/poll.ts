@@ -6,7 +6,7 @@
  * not be asked about ninety times.
  */
 
-import { TimeoutError } from "../errors.js";
+import { PollTimeoutError } from "../errors.js";
 
 export interface PollOptions {
   /** Give up after this long. Default 10 minutes. */
@@ -34,7 +34,7 @@ export async function pollUntil<T>(
 
     if (Date.now() + interval > deadline) {
       const status = opts.statusOf?.(value);
-      throw new TimeoutError(
+      throw new PollTimeoutError(
         `${opts.describe} did not settle within ${Math.round(timeoutMs / 1000)}s` +
           (status ? ` (last status: ${status})` : "") +
           ". It is still running; retrieve it again later.",
