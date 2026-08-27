@@ -160,6 +160,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/evaluations/{evaluation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Evaluation identifier. */
+                evaluation_id: components["parameters"]["EvaluationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a failed evaluation again
+         * @description Re-files a failed run's own request and returns the NEW evaluation, in
+         *     `queued`. The original is left alone, with `retried_by` pointing at the
+         *     successor — the failure stays on the record, because `error.code` is the
+         *     only thing that can answer whether retrying was worth it.
+         *
+         *     **This is the one submission in this API that is idempotent**, and it is
+         *     idempotent on the run being retried rather than on your request. A burst
+         *     of presses picks exactly one winner; every other press is handed that same
+         *     winner. `POST /v1/evaluations` has no such guarantee — see its
+         *     description.
+         *
+         *     **It costs the ordinary price, and that is not paying twice.** A run that
+         *     failed was refunded when it settled: in full on `failed`, and on `partial`
+         *     exactly the detectors that did not land. The detectors that DID land were
+         *     cached at the same moment, so the retry pays for the missing legs and gets
+         *     the rest from cache. It consumes a `detect` rate-limit slot like any
+         *     submission.
+         *
+         *     Refused with `400` when there is nothing to retry, and the message says
+         *     which case it is: the run has not finished, it did not fail, it delivered
+         *     every detector it was asked for, it analyzed no stored clip (submit it
+         *     fresh instead), it has already been attempted too many times, or it was
+         *     already retried and that retry has since been deleted.
+         */
+        post: operations["retryEvaluation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/videos": {
         parameters: {
             query?: never;
@@ -407,8 +452,16 @@ export interface components {
             id: string;
             type: components["schemas"]["GlitchType"];
             description: string;
-            prompt_segment?: components["schemas"]["PromptSegment"];
-            region?: components["schemas"]["GlitchRegion"];
+            /**
+             * @description The prompt span this finding is about. `prompt_misalignment` only.
+             *     NULL, not absent, on a `visual_glitch`. The service sends the key with a null value rather than omitting it, and this schema says so because a contract that quietly disagreed with the wire would be worse than an ugly one. Check for a value, not for the key.
+             */
+            prompt_segment?: components["schemas"]["PromptSegment"] | null;
+            /**
+             * @description Where in the video this finding is. Public for `visual_glitch`.
+             *     NULL on a `prompt_misalignment`: the service produces one but it is not stable enough to publish, so it is withheld — as a null value, not an absent key.
+             */
+            region?: components["schemas"]["GlitchRegion"] | null;
             /**
              * @description Who produced this finding. Absent means the model, which is the common case -- the field is only set explicitly where a human annotated something the model missed, so treat its absence as `model` rather than as unknown.
              *     Deliberately NOT declared with a `default`. A default reads to a code generator as "the server always sends this", and it does not: the value is omitted, not defaulted, and a generated type that made it required would be wrong on almost every finding.
@@ -416,10 +469,11 @@ export interface components {
              */
             source?: "model" | "human";
             /**
-             * @description How far a prompt requirement was from being realized: `6 - score`, so 1 is a minor mismatch and 5 means the requirement is absent entirely. This is also the number the reporting threshold reads, so a finding you receive is by definition one that cleared it.
+             * @description NULL on a `visual_glitch` -- the key is sent with a null value rather than omitted, so test the value.
+             *     How far a prompt requirement was from being realized: `6 - score`, so 1 is a minor mismatch and 5 means the requirement is absent entirely. This is also the number the reporting threshold reads, so a finding you receive is by definition one that cleared it.
              *     In practice this is a `prompt_misalignment` field. The visual detector does not score its findings, so a `visual_glitch` normally has no `severity` at all; where one does appear it came from an older pipeline and grades the defect rather than a requirement. Either way it is optional — branch on `type` and handle its absence rather than assuming a default.
              */
-            severity?: number;
+            severity?: number | null;
         };
         EvaluationSummary: {
             num_glitches: number;
@@ -478,14 +532,41 @@ export interface components {
             detectors?: components["schemas"]["DetectorState"][];
             /** @description Stored video identifier when the evaluation used an uploaded video. */
             video_id?: string | null;
+            /** @description Which try this is. 1 for a run submitted directly; 2 or more for one produced by `POST /v1/evaluations/{evaluation_id}/retry`. There is a ceiling, so a clip that keeps failing under the same instructions stops being retryable rather than being retried forever. */
+            attempt?: number;
+            /** @description The failed evaluation this one was filed to replace, if any. */
+            retry_of?: string | null;
+            /**
+             * @description The evaluation filed to replace this one, if it has been retried.
+             *     Set at most once, which is what makes retrying idempotent: a burst of presses claims this field exactly once, and every press that loses the race is handed the winner.
+             */
+            retried_by?: string | null;
+            /**
+             * @description Whatever you passed on create, echoed back. NULL when you passed nothing -- the key is always present, its value says whether there was any.
+             *     Only found by submitting through the API. Every evaluation created in the console carries metadata, so a contract checked against console traffic alone looked correct here.
+             */
             metadata?: {
                 [key: string]: unknown;
-            };
+            } | null;
+        };
+        /**
+         * @description How many evaluations exist in each status, over the same owner and video scope as the request and deliberately IGNORING `limit`, `offset` and `status`.
+         *     This is what a pager needs. Inferring the end of a list from "was the page full" is wrong at exactly the boundary paging exists to make honest, and a bare total could not tell you the page count for a filtered view.
+         */
+        EvaluationCounts: {
+            queued?: number;
+            processing?: number;
+            completed?: number;
+            partial?: number;
+            failed?: number;
+        } & {
+            [key: string]: number;
         };
         EvaluationList: {
             /** @constant */
             object: "list";
             data: components["schemas"]["Evaluation"][];
+            counts?: components["schemas"]["EvaluationCounts"];
         };
         RateLimitWindow: {
             limit: number;
@@ -539,14 +620,22 @@ export interface components {
         ModelBuild: {
             id: components["schemas"]["ModelId"];
             label: string;
-            version: string;
+            /**
+             * @description The build the model runs, or NULL when that is not ours to state.
+             *     Null is the current answer for `galileo` and will stay so while it is the default: the version belongs to the cluster serving it, and answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
+             */
+            version: string | null;
             note?: string;
         };
         Model: {
             id: components["schemas"]["ModelId"];
             /** @constant */
             object: "model";
-            version: string;
+            /**
+             * @description The build the model runs, or NULL when that is not ours to state.
+             *     Null is the current answer for `galileo` and will stay so while it is the default: the version belongs to the cluster serving it, and answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
+             */
+            version: string | null;
             detectors: components["schemas"]["GlitchType"][];
             input: {
                 formats: string[];
@@ -559,7 +648,8 @@ export interface components {
             /** @constant */
             object: "list";
             builds: components["schemas"]["ModelBuild"][];
-            default_build: string;
+            /** @description The build an evaluation gets when it names no `model_version`, or NULL when that is the cluster's to state — see `Model.version`. Describes the deployment; it is not what a run is filed under. */
+            default_build: string | null;
             data: components["schemas"]["Model"][];
         };
         PricingRates: {
@@ -833,8 +923,18 @@ export interface operations {
             query?: {
                 /** @description Maximum evaluations to return. */
                 limit?: number;
+                /**
+                 * @description How many to skip before the page starts. With `limit` this addresses a page directly -- `limit=20&offset=40` is the third page.
+                 *     The 100-item `limit` bounds one response, not what exists: a caller asking for 500 gets 100, and the hundred-and-first evaluation is one more request away rather than unreachable.
+                 */
+                offset?: number;
                 /** @description Return evaluations for one stored video. */
                 video_id?: string;
+                /**
+                 * @description Keep only these statuses. Comma-joined (`?status=failed,partial`) or repeated (`?status=failed&status=partial`); both are accepted.
+                 *     Filtered before paging, so `counts` and the page boundaries describe the same filtered set. An unrecognised value is dropped rather than refused -- a stale bookmark should return an empty list, not an error.
+                 */
+                status?: components["schemas"]["EvaluationStatus"][];
             };
             header?: never;
             path?: never;
@@ -938,6 +1038,39 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalServerError"];
+        };
+    };
+    retryEvaluation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Evaluation identifier. */
+                evaluation_id: components["parameters"]["EvaluationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new evaluation, queued. */
+            201: {
+                headers: {
+                    "X-RateLimit-Limit": components["headers"]["RateLimitLimit"];
+                    "X-RateLimit-Remaining": components["headers"]["RateLimitRemaining"];
+                    "X-RateLimit-Reset": components["headers"]["RateLimitReset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Evaluation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["InsufficientCredits"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalServerError"];
+            501: components["responses"]["NotImplemented"];
         };
     };
     createVideo: {

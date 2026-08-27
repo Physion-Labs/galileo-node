@@ -10,6 +10,7 @@
   "bugs": {
     "url": "https://github.com/Physion-Labs/galileo-node/issues"
   },
+  "license": "Apache-2.0",
   "keywords": [
     "galileo",
     "physion",
@@ -29,7 +30,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "sideEffects": false,
   "scripts": {
@@ -37,8 +40,10 @@
     "contract:check": "node scripts/check-contract.mjs",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm contract:check && pnpm build && node --test test/*.mjs",
-    "prepack": "pnpm build"
+    "test": "pnpm contract:check && pnpm build && node --test test/smoke.mjs test/transport.mjs test/upload.mjs test/packaging.mjs",
+    "prepack": "pnpm build",
+    "test:e2e": "pnpm build && node --test test/e2e.mjs",
+    "verify:live": "node scripts/verify-live.mjs"
   },
   "publishConfig": {
     "access": "public",
@@ -50,9 +55,12 @@
   "packageManager": "pnpm@10.33.0",
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "openapi-typescript": "^7.9.1",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yaml": "^2.9.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

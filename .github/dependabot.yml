@@ -1,0 +1,23 @@
+# Security updates are enabled through the repository setting (they need no
+# config). This file is the VERSION updates — the routine bumps — kept weekly and
+# grouped, because a public SDK with two devDependency ecosystems otherwise files
+# a pull request a day and the security ones get lost among them.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        patterns: ["*"]
+        # The package has no runtime dependencies, so every bump here is a build
+        # or test tool. One grouped PR a week is the right amount of noise.
+        dependency-type: development
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

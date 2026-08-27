@@ -12,6 +12,6 @@
 # one change that would make the two silently disagree.
 
 repo   = Physion-Labs/PhysionWebapps
-commit = c1b918fd86b1aed59620385be84351cf6529b839
+commit = b1e615b7e30d0347d1efc6ac2cc9d7f63500b9b6
 path   = openapi/galileo-v1.yaml
-sha256 = 056d72d2227e3b83986114b36fbfb90481bd03d1d5c224d2c7fabcbbee243c94
+sha256 = a69b32d4bf3f01ce9241740376f0c770bc7e02354173487ecb569023734f8717

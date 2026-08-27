@@ -1,0 +1,72 @@
+name: publish
+
+# DISABLED ON PURPOSE. There is no `push` or `release` trigger: the only way to
+# run this is to dispatch it by hand and type the version, which is the state the
+# review asked for while the release blockers were open.
+#
+# Turning it on later means adding a `release: [published]` trigger. Do that in
+# the same change that removes the guard below, so the two cannot disagree.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to publish. Must match package.json exactly.
+        required: true
+      i_have_verified_the_live_contract:
+        description: >-
+          Type "yes" only if `pnpm verify:live` has been run against a real
+          deployment WITH a key and reported no mismatches. Its exit code 2 —
+          "INCOMPLETE" — is not a pass.
+        required: true
+
+permissions:
+  contents: read
+  # npm trusted publishing: the registry trusts THIS workflow rather than a
+  # long-lived token, and mints the credential from an OIDC exchange. No
+  # NPM_TOKEN exists to leak, rotate, or find in a log. Every large npm
+  # supply-chain incident of 2026 so far has been a stolen credential.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish # a second gate: approvals live on the environment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Refuse unless the dispatcher confirmed the live check
+        env:
+          CONFIRMED: ${{ inputs.i_have_verified_the_live_contract }}
+        run: |
+          if [ "$CONFIRMED" != "yes" ]; then
+            echo "::error::A published version cannot be unpublished. Run \`pnpm verify:live\` with a key first."
+            exit 1
+          fi
+
+      - name: The tag must match what package.json says
+        env:
+          WANT: ${{ inputs.version }}
+        run: |
+          have=$(node -p "require('./package.json').version")
+          if [ "$have" != "$WANT" ]; then
+            echo "::error::package.json is $have, you asked to publish $WANT."
+            exit 1
+          fi
+
+      - run: pnpm install --frozen-lockfile
+      # Everything the required CI does, again, here — a publish that skipped it
+      # because "CI was green on the branch" is a publish of a different tree.
+      - run: pnpm contract:check
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      # `--provenance` is implied by trusted publishing, and npm rejects the flag
+      # when it is redundant. Needs npm >= 11.5.1 for the OIDC exchange.
+      - run: npm install -g npm@latest
+      - run: npm publish --access public
