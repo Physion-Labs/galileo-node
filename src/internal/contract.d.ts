@@ -564,8 +564,9 @@ export interface components {
             /**
              * @description How long this run took. NULL when nothing was measured -- which is every run settled before it was recorded, and is not backfillable.
              *     Null and never 0. A run whose latency nobody recorded and a run that took no time are different claims, and only one of them is true.
+             *     NOT in `required`, for the same reason `error` is not: during a rolling deploy some tasks are still the older build, and a response from one of those carries no such key. A client that enforces the contract at runtime -- the Python one does -- would raise on those responses, and it would raise only during a deploy, which is the worst time to be debugging a client. Test for a VALUE, not for the key.
              */
-            timing: components["schemas"]["Timing"] | null;
+            timing?: components["schemas"]["Timing"] | null;
             /**
              * @description Whatever you passed on create, echoed back. NULL when you passed nothing -- the key is always present, its value says whether there was any.
              *     Only found by submitting through the API. Every evaluation created in the console carries metadata, so a contract checked against console traffic alone looked correct here.
