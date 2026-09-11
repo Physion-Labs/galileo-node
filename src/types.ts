@@ -1,28 +1,5 @@
-/**
- * The API's shapes, as the contract defines them.
- *
- * EVERY TYPE HERE IS AN ALIAS, and that is the whole design. The previous
- * generation of this client hand-wrote these declarations and then used a
- * compile-time assertion to check them against the server's internal types --
- * which worked only while the client and the server lived in the same
- * repository, and worked by coupling a public package to a private one.
- *
- * Here the contract is the source. `openapi/galileo-v1.yaml` generates
- * `internal/contract.d.ts`, and these aliases give its schemas the names a
- * caller should see. So a field cannot be wrong here without being wrong in the
- * contract, and there is no copy to keep in step: `pnpm contract:check` fails if
- * the generated file is not what the contract produces.
- *
- * It has already paid for itself. The contract declared `source` with
- * `default: model`, which every generator reads as "the server always sends
- * this"; the server omits it instead. Generating rather than transcribing turned
- * that into a visible type change instead of a wrong hand-written `?`.
- *
- * What the aliases are allowed to do is RENAME. `EvaluationFailure` is the
- * contract's name for the object on a failed run and reads oddly as a property
- * type, so it is also exported as `EvaluationError`. What they must never do is
- * narrow, widen, or add.
- */
+/** Public response types come from OpenAPI. SDK request types additionally
+ * accept local paths, which are uploaded before the HTTP request is sent. */
 
 import type { components } from "./internal/contract.js";
 
@@ -31,33 +8,19 @@ type Schemas = components["schemas"];
 // --- Evaluations -----------------------------------------------------------
 
 export type Evaluation = Schemas["Evaluation"];
-/**
- * What you may send to create a run.
- *
- * NOT `Schemas["EvaluationCreate"]` directly. A property carrying a `default` in
- * the contract is one the caller MAY OMIT -- the server supplies the value --
- * but openapi-typescript types a defaulted property as required. That is right
- * for a response, where the default has already been applied by the time you
- * read it, and wrong for a request body, where the default is the entire reason
- * you can leave the field out.
- *
- * rc.3 shipped this way, so `glitch_types` was mandatory and the one-line
- * example in our own README, quickstart and docs did not compile. Nothing
- * failed: the contract check passes (the generated file IS what the contract
- * generates), `tsc --noEmit` passes (no sample is compiled), and the packaging
- * tests pass. It took compiling the documented examples against the published
- * tarball to see it.
- *
- * Listed explicitly rather than blanket-`Partial`, so a field the contract
- * really does require stays required. `test/types.mjs` derives the same set from
- * the yaml and fails if this list drifts from it — which is how `prompt` left
- * this list: PHY-93 made a prompt mandatory on every run, so the contract now
- * requires it and it carries no default. The test said so before a human did.
- */
-type DefaultedByServer = "glitch_types";
+/** Legacy HTTP body, retained for the Galileo compatibility entry point. */
+export type LegacyEvaluationCreateParams = Schemas["LegacyEvaluationCreate"];
 
-export type EvaluationCreateParams = Omit<Schemas["EvaluationCreate"], DefaultedByServer> &
-  Partial<Pick<Schemas["EvaluationCreate"], DefaultedByServer>>;
+/** SDK inputs add a local path; the SDK replaces it with an upload_id. */
+type VideoSource = Schemas["VideoRef"] | { path: string };
+type ExclusiveVideo<T = VideoSource> = T extends unknown
+  ? T & Partial<Record<Exclude<"path" | "url" | "upload_id" | "b64_json", keyof T>, never>>
+  : never;
+export type VideoInput = ExclusiveVideo;
+export type EvaluationInput = Omit<Schemas["EvaluationRequestInput"], "video"> & { video: VideoInput };
+export type EvaluationCreateParams = Omit<Schemas["EvaluationCreate"], "input"> & {
+  input: EvaluationInput;
+};
 export type EvaluationList = Schemas["EvaluationList"];
 export type EvaluationResult = Schemas["EvaluationResult"];
 export type EvaluationStatus = Schemas["EvaluationStatus"];

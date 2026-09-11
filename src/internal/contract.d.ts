@@ -239,8 +239,12 @@ export interface paths {
          *     `skip_upload: true` and no `upload_path`, and the video is immediately
          *     usable. Nothing is charged for the bytes you did not send.
          *
-         *     This consumes an `upload` quota slot. A rejected content type or an
-         *     oversized `size_bytes` is refused before the slot is taken.
+         *     This consumes an `upload` quota slot. Everything this call refuses --
+         *     a content type that is not `video/mp4`, an oversized `size_bytes`, a
+         *     `duration_sec` over the analysis limit, or a `codec` that cannot be
+         *     analyzed -- is refused before the slot is taken and before a record
+         *     exists. Refusals name the limit and what to do about it; they are
+         *     written to be shown to a person as they are.
          */
         post: operations["createVideo"];
         delete?: never;
@@ -307,10 +311,11 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @default galileo
+         * @description Galileo 1.0. The legacy name galileo remains accepted.
+         * @default galileo-1.0
          * @enum {string}
          */
-        ModelId: "galileo" | "gemini";
+        ModelId: "galileo-1.0" | "galileo";
         /** @enum {string} */
         GlitchType: "visual_glitch" | "prompt_misalignment";
         /** @enum {string} */
@@ -329,12 +334,22 @@ export interface components {
             size_bytes: number;
             /** @description SHA-256 of the bytes, hex. Optional, and worth sending: when we already hold this exact content the response says `skip_upload` and there is nothing to transfer. */
             content_hash?: string;
-            /** @description Optional metadata recorded on the video. */
+            /** @description Length of the clip in seconds. Recorded on the video, and CHECKED: a value over the 15-second analysis limit is refused here rather than later, when there is still a file in front of you to trim. */
             duration_sec?: number;
             /** @description Optional metadata recorded on the video. */
             width?: number;
             /** @description Optional metadata recorded on the video. */
             height?: number;
+            /**
+             * @description The video sample format from the file's own header -- the four-character tag in the container's sample description, such as `avc1` (H.264), `hvc1` (H.265) or `av01` (AV1). ffprobe's spelling (`h264`, `hevc`, `av1`) is understood too.
+             *     Optional, and worth sending: only H.264 can be analyzed, and a codec named here that cannot be is refused before a record exists or an upload slot is spent. A codec we do not recognise is never a refusal -- it simply proceeds to the server-side check on `complete`.
+             */
+            codec?: string;
+            /**
+             * @description What the container really is, from its `ftyp` brand. Send it when you know: a QuickTime (`.mov`) file renamed to `.mp4` is named in the refusal it produces, which is otherwise very hard to act on.
+             * @enum {string}
+             */
+            container?: "mp4" | "quicktime";
         };
         VideoReservation: {
             /** @description Reference this as the evaluation's `video.upload_id`, once the video reaches `ready`. */
@@ -388,7 +403,37 @@ export interface components {
          *     `b64_json` sends the bytes inline. Convenient for a small local file, but bounded by the request body limit rather than the file limit -- see `POST /v1/evaluations`.
          */
         VideoRef: components["schemas"]["VideoUrlRef"] | components["schemas"]["VideoUploadRef"] | components["schemas"]["VideoBase64Ref"];
+        EvaluationRequestInput: {
+            video: components["schemas"]["VideoRef"];
+            /** @description What the video was meant to show. Omit it for visual-glitch detection only. A nonblank prompt also enables prompt alignment by default. */
+            prompt?: string;
+        };
         /**
+         * @example {
+         *       "model": "galileo-1.0",
+         *       "input": {
+         *         "video": {
+         *           "url": "https://cdn.example.com/red-ball.mp4"
+         *         },
+         *         "prompt": "A red ball rolls off a table and bounces twice."
+         *       }
+         *     }
+         */
+        EvaluationCreate: {
+            model: components["schemas"]["ModelId"];
+            input: components["schemas"]["EvaluationRequestInput"];
+            /** @description Optional concrete serving version pin; separate from the public model name. */
+            model_version?: string;
+            /** @description Detectors to run. Defaults to those supported by the supplied prompt. */
+            glitch_types?: components["schemas"]["GlitchType"][];
+            /** @description JSON metadata echoed on the evaluation; at most 8192 serialized bytes. */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * @deprecated
+         * @description Legacy flat request body. New clients should use model and input.
          * @example {
          *       "model": "galileo",
          *       "prompt": "A red ball rolls off a table and bounces twice.",
@@ -400,20 +445,25 @@ export interface components {
          *       }
          *     }
          */
-        EvaluationCreate: {
+        LegacyEvaluationCreate: {
             model?: components["schemas"]["ModelId"];
             /** @description Concrete model version to run. The deployment default applies when omitted. */
             model_version?: string;
-            /** @description What the video was meant to show. REQUIRED as of 2026-08-27 (previously optional, defaulting to ""); empty or whitespace-only is refused with `missing_prompt`. */
-            prompt: string;
+            /**
+             * @description What the video was meant to show. OPTIONAL, and what it decides is which detectors run: send one and the clip is checked against it, omit it (or send an empty or whitespace-only string) and only `visual_glitch` runs. The run is priced accordingly — one detector instead of two — so an unprompted submission costs less.
+             *
+             *     It was REQUIRED between 2026-08-27 and 2026-08-30, refusing a blank value with `missing_prompt`. That is reverted: a clip you want checked for visual defects needed a sentence invented for it, and the invented sentence was then measured against the clip by `prompt_misalignment` and billed for.
+             *
+             *     Not trimmed on storage — `prompt_segment.char_start` indexes into it as sent and reports quote it back. Only the emptiness test trims.
+             */
+            prompt?: string;
             video: components["schemas"]["VideoRef"];
             /**
-             * @default [
-             *       "visual_glitch",
-             *       "prompt_misalignment"
-             *     ]
+             * @description Which detectors to run. When omitted the server derives the list from the prompt: `[visual_glitch, prompt_misalignment]` with one, `[visual_glitch]` without.
+             *
+             *     There is no fixed default any more. Naming `prompt_misalignment` without a prompt is refused with `missing_prompt` rather than silently narrowed — a run billed for a detector it did not include is not one the caller can check.
              */
-            glitch_types: components["schemas"]["GlitchType"][];
+            glitch_types?: components["schemas"]["GlitchType"][];
             /** @description JSON metadata echoed on the evaluation. Serialized size must not exceed 8192 bytes. */
             metadata?: {
                 [key: string]: unknown;
@@ -438,7 +488,13 @@ export interface components {
         GlitchRegion: {
             start: components["schemas"]["TimePoint"];
             end: components["schemas"]["TimePoint"];
-            boxes: components["schemas"]["BoxKeyframe"][];
+            /**
+             * @description The per-frame track.
+             *     An EMPTY array is the model's own answer: it located this finding in time but not in frame, which is a real finding and not an error.
+             *     ABSENT is a different statement -- this response does not carry the track. Only `GET /v1/evaluations` asked for with `?omit=boxes` answers that way; a create and a retrieve always carry it. Do not render "no box" for the absent case.
+             *     `start` and `end` are required either way, so a finding can always be placed in time.
+             */
+            boxes?: components["schemas"]["BoxKeyframe"][];
         };
         PromptSegment: {
             text: string;
@@ -490,6 +546,11 @@ export interface components {
              */
             severity?: number;
         };
+        /**
+         * @description Counts over the findings this run REPORTED. `false` means "this detector reported nothing", which is not the same as "this detector found nothing": a run submitted without a prompt does not run `prompt_misalignment` at all, and reports `has_prompt_misalignment: false` exactly as a run that checked and found the prompt fully delivered does.
+         *
+         *     `detectors[]` is the field that tells those apart, and is the one to read before presenting either as a verdict. These two booleans are kept as required non-nullable for compatibility — every existing consumer reads them as plain booleans — rather than growing a third state here.
+         */
         EvaluationSummary: {
             num_glitches: number;
             has_visual_glitch: boolean;
@@ -559,6 +620,12 @@ export interface components {
             detectors?: components["schemas"]["DetectorState"][];
             /** @description Stored video identifier when the evaluation used an uploaded video. */
             video_id?: string | null;
+            /**
+             * Format: uri
+             * @description The hosted url the evaluation analysed, when it was submitted with `video.url`. The counterpart to `video_id`: exactly one of the two is set, and both are null for an inline (`b64_json`) run.
+             *     It is the url you sent, recorded so the run can say what it judged -- not a promise that it still resolves. Absent on runs filed before this field existed, and not recoverable for them.
+             */
+            video_url?: string | null;
             /** @description Which try this is. 1 for a run submitted directly; 2 or more for one produced by `POST /v1/evaluations/{evaluation_id}/retry`. There is a ceiling, so a clip that keeps failing under the same instructions stops being retryable rather than being retried forever. */
             attempt?: number;
             /**
@@ -644,7 +711,8 @@ export interface components {
             api_key?: components["schemas"]["ApiKeySummary"];
         };
         ModelBuild: {
-            id: components["schemas"]["ModelId"];
+            /** @description Deployment build identifier; distinct from the public model name. */
+            id: string;
             label: string;
             /**
              * @description The build the model runs, or NULL when that is not ours to state.
@@ -667,7 +735,6 @@ export interface components {
                 formats: string[];
                 max_duration_sec: number;
                 max_file_bytes: number;
-                aspect_ratios: string[];
             };
         };
         ModelList: {
@@ -713,7 +780,7 @@ export interface components {
         /** @enum {string} */
         ErrorType: "invalid_request_error" | "authentication_error" | "rate_limit_error" | "api_error";
         /** @enum {string} */
-        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "invalid_glitch_types" | "video_too_long" | "invalid_video" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
+        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "video_too_long" | "invalid_video" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
         Error: {
             type: components["schemas"]["ErrorType"];
             code: components["schemas"]["ErrorCode"];
@@ -961,6 +1028,13 @@ export interface operations {
                  *     Filtered before paging, so `counts` and the page boundaries describe the same filtered set. An unrecognised value is dropped rather than refused -- a stale bookmark should return an empty list, not an error.
                  */
                 status?: components["schemas"]["EvaluationStatus"][];
+                /**
+                 * @description Parts of the result this response may leave out. Comma-joined or repeated, like `status`, and an unrecognised value is dropped rather than refused.
+                 *     `boxes` drops `result.glitches[].region.boxes` -- the per-frame rectangles -- and nothing else. `region.start` and `region.end` are kept, so every finding can still be placed in time.
+                 *     AN OPT-OUT, and the default does not move: send nothing and you get the whole record exactly as you always have. It is worth sending when you are listing runs to count, filter or tabulate them rather than to draw the boxes, because that is where the response size is -- a page of thirty runs is around 718 KB, of which about 97% is `result` and about 95% of that is this one field.
+                 *     This list only. `GET /v1/evaluations/{evaluation_id}` ignores it.
+                 */
+                omit?: "boxes"[];
             };
             header?: never;
             path?: never;
@@ -991,7 +1065,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["EvaluationCreate"];
+                "application/json": components["schemas"]["EvaluationCreate"] | components["schemas"]["LegacyEvaluationCreate"];
             };
         };
         responses: {
