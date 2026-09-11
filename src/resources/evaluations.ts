@@ -1,9 +1,11 @@
+import { InvalidRequestError } from "../errors.js";
+import type { Videos } from "./videos.js";
 /** Submit videos and read back what Galileo found. */
 
 import type { Transport } from "../internal/transport.js";
 import { pollUntil, type PollOptions } from "../internal/poll.js";
 import type { RequestOptions } from "../internal/options.js";
-import type { Evaluation, EvaluationCreateParams, EvaluationList, EvaluationStatus } from "../types.js";
+import type { Evaluation, EvaluationCreateParams, LegacyEvaluationCreateParams, EvaluationList, EvaluationStatus } from "../types.js";
 
 /**
  * An evaluation stops changing at one of these.
@@ -14,15 +16,15 @@ import type { Evaluation, EvaluationCreateParams, EvaluationList, EvaluationStat
  */
 const SETTLED: EvaluationStatus[] = ["completed", "partial", "failed"];
 
-export class Evaluations {
-  constructor(private readonly transport: Transport) {}
+export class EvaluationResource {
+  constructor(protected readonly transport: Transport) {}
 
   /**
    * Queue an evaluation. Returns immediately, in `queued`.
    *
    * Use `createAndWait` unless you have your own polling.
    */
-  async create(params: EvaluationCreateParams, opts: RequestOptions = {}): Promise<Evaluation> {
+  protected async submitLegacy(params: LegacyEvaluationCreateParams, opts: RequestOptions = {}): Promise<Evaluation> {
     return this.transport.json<Evaluation>({
       method: "POST",
       path: "/v1/evaluations",
@@ -167,15 +169,7 @@ export class Evaluations {
     );
   }
 
-  /** Submit and wait. What most callers want. */
-  async createAndWait(
-    params: EvaluationCreateParams,
-    opts: PollOptions = {},
-  ): Promise<Evaluation> {
-    const queued = await this.create(params, { signal: opts.signal });
-    if (SETTLED.includes(queued.status)) return queued;
-    return this.waitUntilSettled(queued.id, opts);
-  }
+
 }
 
 /**
@@ -192,4 +186,81 @@ export class Evaluations {
 function countFor(counts: Record<string, number>, status?: EvaluationStatus[]): number {
   const keys = status?.length ? status : Object.keys(counts);
   return keys.reduce((sum, key) => sum + (counts[key] ?? 0), 0);
+}
+
+
+export interface SubmissionOptions extends PollOptions {
+  /** Video validation wait, separate from evaluation polling. Default 10 minutes. */
+  uploadTimeoutMs?: number;
+}
+
+export class Evaluations extends EvaluationResource {
+  constructor(transport: Transport, private readonly videos: Videos) {
+    super(transport);
+  }
+
+  /** Upload if needed, then submit. Does not wait for evaluation completion. */
+  async submit(params: EvaluationCreateParams, opts: SubmissionOptions = {}): Promise<Evaluation> {
+    opts.signal?.throwIfAborted();
+    if (!params || typeof params.model !== "string" || !params.model.trim()) {
+      throw new TypeError("model must be a non-empty string");
+    }
+    const input = params.input;
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        Object.keys(input).some(k => !["video", "prompt"].includes(k))) {
+      throw new TypeError("input must contain video and optionally prompt");
+    }
+    if (input.prompt !== undefined && typeof input.prompt !== "string") {
+      throw new TypeError("input.prompt must be a string");
+    }
+    let video = input.video;
+    if (!video || typeof video !== "object" || Object.keys(video).length !== 1 ||
+        !Object.keys(video).every(k => ["path", "url", "upload_id", "b64_json"].includes(k)) ||
+        !Object.values(video).every(v => typeof v === "string" && v.length > 0)) {
+      throw new TypeError("input.video must contain exactly one of path, url, upload_id, b64_json");
+    }
+    if (typeof video.path === "string") {
+      const uploaded = await this.videos.upload({
+        path: video.path, signal: opts.signal,
+        timeoutMs: opts.uploadTimeoutMs ?? 600_000,
+        ...(opts.initialIntervalMs !== undefined ? { initialIntervalMs: opts.initialIntervalMs } : {}),
+        ...(opts.maxIntervalMs !== undefined ? { maxIntervalMs: opts.maxIntervalMs } : {}),
+      });
+      if (uploaded.status !== "ready") {
+        throw new InvalidRequestError({
+          status: 422, type: "invalid_request_error", code: "invalid_video",
+          message: `Video ${uploaded.id} failed validation: ${uploaded.status}`,
+        });
+      }
+      video = { upload_id: uploaded.id };
+    }
+    return this.transport.json<Evaluation>({
+      method: "POST", path: "/v1/evaluations",
+      body: { ...params, input: { ...input, video } },
+      signal: opts.signal, maxRetries: 0,
+    });
+  }
+
+  /** Upload, submit and wait for completed, partial or failed. */
+  async create(params: EvaluationCreateParams, opts: SubmissionOptions = {}): Promise<Evaluation> {
+    const queued = await this.submit(params, opts);
+    if (SETTLED.includes(queued.status)) return queued;
+    return this.waitUntilSettled(queued.id, opts);
+  }
+}
+
+/** Compatibility for the original Galileo entry point. Prefer Client. */
+export class LegacyEvaluations extends EvaluationResource {
+  async create(params: LegacyEvaluationCreateParams, opts: RequestOptions = {}): Promise<Evaluation> {
+    return this.submitLegacy(params, opts);
+  }
+  /** Submit and wait. What most callers want. */
+  async createAndWait(
+    params: LegacyEvaluationCreateParams,
+    opts: PollOptions = {},
+  ): Promise<Evaluation> {
+    const queued = await this.submitLegacy(params, { signal: opts.signal });
+    if (SETTLED.includes(queued.status)) return queued;
+    return this.waitUntilSettled(queued.id, opts);
+  }
 }

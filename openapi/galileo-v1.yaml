@@ -16,8 +16,6 @@ info:
 servers:
   - url: https://api.physionlabs.ai
     description: Production
-  - url: https://api-dev.physionlabs.ai
-    description: Development
 tags:
   - name: Platform
     description: Service health and account metadata.
@@ -134,7 +132,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/EvaluationCreate"
+              oneOf:
+                - $ref: "#/components/schemas/EvaluationCreate"
+                - $ref: "#/components/schemas/LegacyEvaluationCreate"
       responses:
         "201":
           description: Evaluation created.
@@ -210,6 +210,31 @@ paths:
             type: array
             items:
               $ref: "#/components/schemas/EvaluationStatus"
+        - name: omit
+          in: query
+          description: >-
+            Parts of the result this response may leave out. Comma-joined or
+            repeated, like `status`, and an unrecognised value is dropped rather
+            than refused.
+
+            `boxes` drops `result.glitches[].region.boxes` -- the per-frame
+            rectangles -- and nothing else. `region.start` and `region.end` are
+            kept, so every finding can still be placed in time.
+
+            AN OPT-OUT, and the default does not move: send nothing and you get
+            the whole record exactly as you always have. It is worth sending when
+            you are listing runs to count, filter or tabulate them rather than to
+            draw the boxes, because that is where the response size is -- a page
+            of thirty runs is around 718 KB, of which about 97% is `result` and
+            about 95% of that is this one field.
+
+            This list only. `GET /v1/evaluations/{evaluation_id}` ignores it.
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [boxes]
       responses:
         "200":
           description: Evaluation list.
@@ -345,8 +370,12 @@ paths:
         `skip_upload: true` and no `upload_path`, and the video is immediately
         usable. Nothing is charged for the bytes you did not send.
 
-        This consumes an `upload` quota slot. A rejected content type or an
-        oversized `size_bytes` is refused before the slot is taken.
+        This consumes an `upload` quota slot. Everything this call refuses --
+        a content type that is not `video/mp4`, an oversized `size_bytes`, a
+        `duration_sec` over the analysis limit, or a `codec` that cannot be
+        analyzed -- is refused before the slot is taken and before a record
+        exists. Refusals name the limit and what to do about it; they are
+        written to be shown to a person as they are.
       tags: [Videos]
       requestBody:
         required: true
@@ -537,8 +566,9 @@ components:
   schemas:
     ModelId:
       type: string
-      enum: [galileo, gemini]
-      default: galileo
+      enum: [galileo-1.0, galileo]
+      default: galileo-1.0
+      description: Galileo 1.0. The legacy name galileo remains accepted.
     GlitchType:
       type: string
       enum: [visual_glitch, prompt_misalignment]
@@ -578,7 +608,10 @@ components:
         duration_sec:
           type: number
           exclusiveMinimum: 0
-          description: Optional metadata recorded on the video.
+          description: >-
+            Length of the clip in seconds. Recorded on the video, and CHECKED:
+            a value over the 15-second analysis limit is refused here rather
+            than later, when there is still a file in front of you to trim.
         width:
           type: integer
           minimum: 1
@@ -587,6 +620,25 @@ components:
           type: integer
           minimum: 1
           description: Optional metadata recorded on the video.
+        codec:
+          type: string
+          description: >-
+            The video sample format from the file's own header -- the
+            four-character tag in the container's sample description, such as
+            `avc1` (H.264), `hvc1` (H.265) or `av01` (AV1). ffprobe's spelling
+            (`h264`, `hevc`, `av1`) is understood too.
+
+            Optional, and worth sending: only H.264 can be analyzed, and a codec
+            named here that cannot be is refused before a record exists or an
+            upload slot is spent. A codec we do not recognise is never a refusal
+            -- it simply proceeds to the server-side check on `complete`.
+        container:
+          type: string
+          enum: [mp4, quicktime]
+          description: >-
+            What the container really is, from its `ftyp` brand. Send it when
+            you know: a QuickTime (`.mov`) file renamed to `.mp4` is named in
+            the refusal it produces, which is otherwise very hard to act on.
     VideoReservation:
       type: object
       required: [video_id, cdn_url]
@@ -695,10 +747,55 @@ components:
         - $ref: "#/components/schemas/VideoUrlRef"
         - $ref: "#/components/schemas/VideoUploadRef"
         - $ref: "#/components/schemas/VideoBase64Ref"
+    EvaluationRequestInput:
+      type: object
+      additionalProperties: false
+      required: [video]
+      properties:
+        video:
+          $ref: "#/components/schemas/VideoRef"
+        prompt:
+          type: string
+          maxLength: 2500
+          description: >-
+            What the video was meant to show. Omit it for visual-glitch detection
+            only. A nonblank prompt also enables prompt alignment by default.
     EvaluationCreate:
       type: object
       additionalProperties: false
-      required: [prompt, video]
+      required: [model, input]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelId"
+        input:
+          $ref: "#/components/schemas/EvaluationRequestInput"
+        model_version:
+          type: string
+          minLength: 1
+          description: Optional concrete serving version pin; separate from the public model name.
+        glitch_types:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/GlitchType"
+          description: Detectors to run. Defaults to those supported by the supplied prompt.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: JSON metadata echoed on the evaluation; at most 8192 serialized bytes.
+      examples:
+        - model: galileo-1.0
+          input:
+            video:
+              url: https://cdn.example.com/red-ball.mp4
+            prompt: A red ball rolls off a table and bounces twice.
+    LegacyEvaluationCreate:
+      deprecated: true
+      description: Legacy flat request body. New clients should use model and input.
+      type: object
+      additionalProperties: false
+      required: [video]
       properties:
         model:
           $ref: "#/components/schemas/ModelId"
@@ -708,23 +805,40 @@ components:
           description: Concrete model version to run. The deployment default applies when omitted.
         prompt:
           type: string
-          minLength: 1
-          # Unanchored, so this asserts "contains at least one non-whitespace
-          # character" — a prompt of spaces is refused by the server and must be
-          # refused here too, which `minLength` alone does not do.
-          pattern: "\\S"
           maxLength: 2500
           description: >-
-            What the video was meant to show. REQUIRED as of 2026-08-27
-            (previously optional, defaulting to ""); empty or whitespace-only is
-            refused with `missing_prompt`.
+            What the video was meant to show. OPTIONAL, and what it decides is
+            which detectors run: send one and the clip is checked against it,
+            omit it (or send an empty or whitespace-only string) and only
+            `visual_glitch` runs. The run is priced accordingly — one detector
+            instead of two — so an unprompted submission costs less.
+
+
+            It was REQUIRED between 2026-08-27 and 2026-08-30, refusing a blank
+            value with `missing_prompt`. That is reverted: a clip you want
+            checked for visual defects needed a sentence invented for it, and
+            the invented sentence was then measured against the clip by
+            `prompt_misalignment` and billed for.
+
+
+            Not trimmed on storage — `prompt_segment.char_start` indexes into it
+            as sent and reports quote it back. Only the emptiness test trims.
         video:
           $ref: "#/components/schemas/VideoRef"
         glitch_types:
           type: array
           minItems: 1
           uniqueItems: true
-          default: [visual_glitch, prompt_misalignment]
+          description: >-
+            Which detectors to run. When omitted the server derives the list
+            from the prompt: `[visual_glitch, prompt_misalignment]` with one,
+            `[visual_glitch]` without.
+
+
+            There is no fixed default any more. Naming `prompt_misalignment`
+            without a prompt is refused with `missing_prompt` rather than
+            silently narrowed — a run billed for a detector it did not include
+            is not one the caller can check.
           items:
             $ref: "#/components/schemas/GlitchType"
         metadata:
@@ -773,7 +887,7 @@ components:
     GlitchRegion:
       type: object
       additionalProperties: false
-      required: [start, end, boxes]
+      required: [start, end]
       properties:
         start:
           $ref: "#/components/schemas/TimePoint"
@@ -781,6 +895,19 @@ components:
           $ref: "#/components/schemas/TimePoint"
         boxes:
           type: array
+          description: >-
+            The per-frame track.
+
+            An EMPTY array is the model's own answer: it located this finding in
+            time but not in frame, which is a real finding and not an error.
+
+            ABSENT is a different statement -- this response does not carry the
+            track. Only `GET /v1/evaluations` asked for with `?omit=boxes`
+            answers that way; a create and a retrieve always carry it. Do not
+            render "no box" for the absent case.
+
+            `start` and `end` are required either way, so a finding can always be
+            placed in time.
           items:
             $ref: "#/components/schemas/BoxKeyframe"
     PromptSegment:
@@ -878,6 +1005,19 @@ components:
     EvaluationSummary:
       type: object
       additionalProperties: false
+      description: >-
+        Counts over the findings this run REPORTED. `false` means "this detector
+        reported nothing", which is not the same as "this detector found
+        nothing": a run submitted without a prompt does not run
+        `prompt_misalignment` at all, and reports `has_prompt_misalignment:
+        false` exactly as a run that checked and found the prompt fully
+        delivered does.
+
+
+        `detectors[]` is the field that tells those apart, and is the one to read
+        before presenting either as a verdict. These two booleans are kept as
+        required non-nullable for compatibility — every existing consumer reads
+        them as plain booleans — rather than growing a third state here.
       required: [num_glitches, has_visual_glitch, has_prompt_misalignment]
       properties:
         num_glitches: { type: integer, minimum: 0 }
@@ -989,6 +1129,10 @@ components:
           type: object
           required: [prompt, video]
           properties:
+            # Always present, and `""` when the submission carried no prompt —
+            # never null. The request field is optional; the stored echo of it is
+            # not, because every consumer already reads it as a string and a
+            # nullable one would break them to express a state `""` expresses.
             prompt: { type: string }
             video:
               $ref: "#/components/schemas/VideoInfo"
@@ -1026,6 +1170,19 @@ components:
             - string
             - "null"
           description: Stored video identifier when the evaluation used an uploaded video.
+        video_url:
+          type:
+            - string
+            - "null"
+          format: uri
+          description: >-
+            The hosted url the evaluation analysed, when it was submitted with
+            `video.url`. The counterpart to `video_id`: exactly one of the two is
+            set, and both are null for an inline (`b64_json`) run.
+
+            It is the url you sent, recorded so the run can say what it judged --
+            not a promise that it still resolves. Absent on runs filed before
+            this field existed, and not recoverable for them.
         attempt:
           type: integer
           minimum: 1
@@ -1160,7 +1317,7 @@ components:
         last4: { type: string }
     Account:
       type: object
-      required: [object, id, email, name, tier, credits, unlimited, limits]
+      required: [object, id, email, name, tier, credits, usd, unlimited, limits]
       properties:
         object:
           type: string
@@ -1169,7 +1326,17 @@ components:
         email: { type: [string, "null"], format: email }
         name: { type: [string, "null"] }
         tier: { type: string }
-        credits: { type: number }
+        credits:
+          type: number
+          description: >-
+            Balance in credits — the stored integer, and the unit that moves.
+            One credit is one cent.
+        usd:
+          type: string
+          description: >-
+            The same balance as money, e.g. "10.00". Credits are what a client
+            should compute with; this is what it should show a person.
+          example: "10.00"
         unlimited: { type: boolean }
         limits:
           $ref: "#/components/schemas/AccountLimits"
@@ -1180,7 +1347,8 @@ components:
       required: [id, label, version]
       properties:
         id:
-          $ref: "#/components/schemas/ModelId"
+          type: string
+          description: Deployment build identifier; distinct from the public model name.
         label: { type: string }
         version:
           type: [string, "null"]
@@ -1220,16 +1388,13 @@ components:
             $ref: "#/components/schemas/GlitchType"
         input:
           type: object
-          required: [formats, max_duration_sec, max_file_bytes, aspect_ratios]
+          required: [formats, max_duration_sec, max_file_bytes]
           properties:
             formats:
               type: array
               items: { type: string }
             max_duration_sec: { type: number, minimum: 0 }
             max_file_bytes: { type: integer, minimum: 1 }
-            aspect_ratios:
-              type: array
-              items: { type: string }
     ModelList:
       type: object
       required: [object, builds, default_build, data]
@@ -1265,11 +1430,36 @@ components:
         minimum: { type: number, minimum: 0 }
         assumed_duration_sec: { type: number, minimum: 0 }
         generation_from_catalog: { type: boolean }
+        flat_per_run:
+          type: number
+          minimum: 0
+          description: >-
+            What a whole analysis costs, whatever its length and whichever
+            detectors run — 10 credits ($0.10) on the v4 card. WHEN THIS IS
+            PRESENT IT IS THE WHOLE PRICE: the per-second fields above, the
+            cache multiplier and the minimum all stop applying. They remain on
+            the card because an account on an older one is charged by them, so a
+            client pricing a run locally must check this field first.
+        per_second_per_run:
+          type: number
+          minimum: 0
+          description: >-
+            What one second of clip costs for the whole analysis, whichever
+            detectors run — 1 credit ($0.01) per second on the current card.
+            The price of a run is this times the clip's duration rounded UP to
+            a whole second, floored at `minimum`. Like `flat_per_run` it is the
+            whole price: the per-detector fields and the cache multiplier stop
+            applying. Check `flat_per_run` first, then this, and only then the
+            per-detector fields.
     Credits:
       type: object
-      required: [credits, pricing, unlimited, per_generated_sec]
+      required: [credits, usd, pricing, unlimited, per_generated_sec]
       properties:
         credits: { type: number }
+        usd:
+          type: string
+          description: The same balance as money, e.g. "10.00". See Account.usd.
+          example: "10.00"
         pricing:
           $ref: "#/components/schemas/PricingRates"
         unlimited: { type: boolean }
@@ -1312,6 +1502,7 @@ components:
         - missing_video
         - missing_prompt
         - prompt_too_long
+        - prompt_refused
         - invalid_glitch_types
         - video_too_long
         - invalid_video

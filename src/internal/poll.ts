@@ -29,6 +29,7 @@ export async function pollUntil<T>(
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
+    opts.signal?.throwIfAborted();
     const value = await fetchOnce();
     if (settled(value)) return value;
 

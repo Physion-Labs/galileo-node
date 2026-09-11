@@ -109,7 +109,9 @@ export class Videos {
     // The server already held this content, so there is nothing to send and
     // nothing to wait for.
     if (reserved.skip_upload || !reserved.upload_path) {
-      return this.retrieve(reserved.video_id, { signal: params.signal });
+      const existing = await this.retrieve(reserved.video_id, { signal: params.signal });
+      if (params.wait === false || SETTLED.includes(existing.status)) return existing;
+      return this.waitUntilReady(reserved.video_id, params);
     }
 
     // 2. Send the bytes — to storage, NOT to the API. No Authorization header:

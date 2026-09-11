@@ -5,7 +5,7 @@
  */
 
 import { Transport, type FetchLike } from "./internal/transport.js";
-import { Evaluations } from "./resources/evaluations.js";
+import { Evaluations, LegacyEvaluations } from "./resources/evaluations.js";
 import { Videos } from "./resources/videos.js";
 import { AccountResource } from "./resources/account.js";
 
@@ -62,34 +62,54 @@ export interface GalileoOptions {
 }
 
 export class Galileo {
-  readonly evaluations: Evaluations;
+  readonly evaluations: LegacyEvaluations;
   readonly videos: Videos;
   readonly account: AccountResource;
 
   constructor(opts: GalileoOptions = {}) {
-    const apiKey = opts.apiKey ?? process.env.GALILEO_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "No API key. Pass `apiKey`, or set GALILEO_API_KEY in the environment.",
-      );
-    }
-    const baseURL = opts.baseURL ?? DEFAULT_BASE_URL;
-
-    const transport = new Transport({
-      apiKey,
-      baseURL,
-      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-      ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
-      ...(opts.rateLimitBudgetMs !== undefined ? { rateLimitBudgetMs: opts.rateLimitBudgetMs } : {}),
-      ...(opts.maxRateLimitRetries !== undefined
-        ? { maxRateLimitRetries: opts.maxRateLimitRetries }
-        : {}),
-      ...(opts.maxConcurrency !== undefined ? { maxConcurrency: opts.maxConcurrency } : {}),
-      ...(opts.fetch !== undefined ? { fetch: opts.fetch } : {}),
-    });
-
-    this.evaluations = new Evaluations(transport);
-    this.videos = new Videos(transport, opts.uploadBaseURL ?? baseURL);
+    const transport = createTransport(opts);
+    this.evaluations = new LegacyEvaluations(transport);
+    this.videos = new Videos(transport, opts.uploadBaseURL ?? opts.baseURL ?? DEFAULT_BASE_URL);
     this.account = new AccountResource(transport);
   }
+}
+
+export type ClientOptions = GalileoOptions;
+
+/** Client for model-based evaluations. Reads GALILEO_API_KEY by default. */
+export class Client {
+  readonly evaluations: Evaluations;
+  readonly videos: Videos;
+  readonly account: AccountResource;
+
+  constructor(opts: ClientOptions = {}) {
+    const transport = createTransport(opts);
+    this.videos = new Videos(transport, opts.uploadBaseURL ?? opts.baseURL ?? DEFAULT_BASE_URL);
+    this.evaluations = new Evaluations(transport, this.videos);
+    this.account = new AccountResource(transport);
+  }
+}
+
+function createTransport(opts: GalileoOptions): Transport {
+  const apiKey = opts.apiKey ?? process.env.GALILEO_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "No API key. Pass `apiKey`, or set GALILEO_API_KEY in the environment.",
+    );
+  }
+  const baseURL = opts.baseURL ?? DEFAULT_BASE_URL;
+
+  return new Transport({
+    apiKey,
+    baseURL,
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+    ...(opts.rateLimitBudgetMs !== undefined ? { rateLimitBudgetMs: opts.rateLimitBudgetMs } : {}),
+    ...(opts.maxRateLimitRetries !== undefined
+      ? { maxRateLimitRetries: opts.maxRateLimitRetries }
+      : {}),
+    ...(opts.maxConcurrency !== undefined ? { maxConcurrency: opts.maxConcurrency } : {}),
+    ...(opts.fetch !== undefined ? { fetch: opts.fetch } : {}),
+  });
+
 }
