@@ -705,7 +705,13 @@ export interface components {
             email: string | null;
             name: string | null;
             tier: string;
+            /** @description Balance in credits — the stored integer, and the unit that moves. One credit is one cent. */
             credits: number;
+            /**
+             * @description The same balance as money, e.g. "10.00". Credits are what a client should compute with; this is what it should show a person.
+             * @example 10.00
+             */
+            usd: string;
             unlimited: boolean;
             limits: components["schemas"]["AccountLimits"];
             api_key?: components["schemas"]["ApiKeySummary"];
@@ -755,9 +761,18 @@ export interface components {
             minimum: number;
             assumed_duration_sec: number;
             generation_from_catalog?: boolean;
+            /** @description What a whole analysis costs, whatever its length and whichever detectors run — 10 credits ($0.10) on the v4 card. WHEN THIS IS PRESENT IT IS THE WHOLE PRICE: the per-second fields above, the cache multiplier and the minimum all stop applying. They remain on the card because an account on an older one is charged by them, so a client pricing a run locally must check this field first. */
+            flat_per_run?: number;
+            /** @description What one second of clip costs for the whole analysis, whichever detectors run — 1 credit ($0.01) per second on the current card. The price of a run is this times the clip's duration rounded UP to a whole second, floored at `minimum`. Like `flat_per_run` it is the whole price: the per-detector fields and the cache multiplier stop applying. Check `flat_per_run` first, then this, and only then the per-detector fields. */
+            per_second_per_run?: number;
         };
         Credits: {
             credits: number;
+            /**
+             * @description The same balance as money, e.g. "10.00". See Account.usd.
+             * @example 10.00
+             */
+            usd: string;
             pricing: components["schemas"]["PricingRates"];
             unlimited: boolean;
             per_generated_sec: number;
