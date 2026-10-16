@@ -16,6 +16,12 @@ import type { Evaluation, EvaluationCreateParams, LegacyEvaluationCreateParams, 
  */
 const SETTLED: EvaluationStatus[] = ["completed", "partial", "failed"];
 
+/** Raw outputs are several MB and the first fetch may be slow. */
+const RAW_TIMEOUT_MS = 300_000;
+
+/** An evaluation plus its raw model outputs. Internal accounts only. */
+export type EvaluationWithRaw = Evaluation & { raw: Record<string, unknown> | null; raw_pruned: boolean };
+
 export class EvaluationResource {
   constructor(protected readonly transport: Transport) {}
 
@@ -50,12 +56,30 @@ export class EvaluationResource {
     });
   }
 
-  async retrieve(id: string, opts: RequestOptions = {}): Promise<Evaluation> {
-    return this.transport.json<Evaluation>({
+  async retrieve(id: string, opts: RequestOptions & { outputRaw?: boolean } = {}): Promise<Evaluation> {
+    const ev = await this.transport.json<Evaluation>({
       method: "GET",
       path: `/v1/evaluations/${encodeURIComponent(id)}`,
       signal: opts.signal,
     });
+    return opts.outputRaw ? this.withRaw(ev, opts) : ev;
+  }
+
+  /** Raw model outputs and whether they were pruned. Internal accounts only. */
+  async raw(id: string, opts: RequestOptions = {}): Promise<{ raw: Record<string, unknown>; pruned: boolean }> {
+    const res = await this.transport.send({
+      method: "GET",
+      path: `/v1/evaluations/${encodeURIComponent(id)}/raw`,
+      signal: opts.signal,
+      timeoutMs: RAW_TIMEOUT_MS,
+    });
+    return { raw: (await res.json()) as Record<string, unknown>, pruned: res.headers.get("x-raw-outputs") === "pruned" };
+  }
+
+  protected async withRaw(ev: Evaluation, opts: RequestOptions): Promise<EvaluationWithRaw> {
+    if (ev.status === "failed") return { ...ev, raw: null, raw_pruned: false };
+    const { raw, pruned } = await this.raw(ev.id, opts);
+    return { ...ev, raw, raw_pruned: pruned };
   }
 
   /**
@@ -161,12 +185,13 @@ export class EvaluationResource {
   }
 
   /** Poll an existing evaluation until it stops changing. */
-  async waitUntilSettled(id: string, opts: PollOptions = {}): Promise<Evaluation> {
-    return pollUntil<Evaluation>(
+  async waitUntilSettled(id: string, opts: PollOptions & { outputRaw?: boolean } = {}): Promise<Evaluation> {
+    const ev = await pollUntil<Evaluation>(
       () => this.retrieve(id, { signal: opts.signal }),
       (ev) => SETTLED.includes(ev.status),
       { ...opts, describe: `evaluation ${id}`, statusOf: (ev) => ev.status },
     );
+    return opts.outputRaw ? this.withRaw(ev, opts) : ev;
   }
 
 
@@ -192,6 +217,8 @@ function countFor(counts: Record<string, number>, status?: EvaluationStatus[]): 
 export interface SubmissionOptions extends PollOptions {
   /** Video validation wait, separate from evaluation polling. Default 10 minutes. */
   uploadTimeoutMs?: number;
+  /** Also return the raw model outputs (internal accounts only). */
+  outputRaw?: boolean;
 }
 
 export class Evaluations extends EvaluationResource {
@@ -244,7 +271,7 @@ export class Evaluations extends EvaluationResource {
   /** Upload, submit and wait for completed, partial or failed. */
   async create(params: EvaluationCreateParams, opts: SubmissionOptions = {}): Promise<Evaluation> {
     const queued = await this.submit(params, opts);
-    if (SETTLED.includes(queued.status)) return queued;
+    if (SETTLED.includes(queued.status)) return opts.outputRaw ? this.withRaw(queued, opts) : queued;
     return this.waitUntilSettled(queued.id, opts);
   }
 }

@@ -86,6 +86,8 @@ export interface RequestSpec {
   absoluteURL?: string;
   /** Per-call override. Uploads use 0: re-sending tens of megabytes is not free. */
   maxRetries?: number;
+  /** Per-call deadline override. */
+  timeoutMs?: number;
 }
 
 /**
@@ -179,7 +181,7 @@ export class Transport {
     const rateLimitDeadline = Date.now() + this.#rateLimitBudgetMs;
 
     for (;;) {
-      const { signal, done } = withTimeout(this.#timeoutMs, spec.signal);
+      const { signal, done } = withTimeout(spec.timeoutMs ?? this.#timeoutMs, spec.signal);
       let res: Response;
       try {
         res = await this.#fetch(url, this.#init(spec, signal));

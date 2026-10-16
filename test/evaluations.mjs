@@ -123,3 +123,22 @@ for (const input of [{}, { video: { path: "x", url: "https://example.com/x" } },
     assert.equal(calls.length, 0);
   });
 }
+
+test("outputRaw fetches raw once after settling, with a longer timeout", async () => {
+  const raw = { verdicts: [], intermediates: { object_tracks: { tracks: [] } } };
+  const { client, calls } = script(json(ev("queued")), json(ev()), json(raw));
+  const result = await client.evaluations.create(remote, { outputRaw: true, initialIntervalMs: 1 });
+  assert.deepEqual(result.raw, raw);
+  assert.equal(result.raw_pruned, false);
+  assert.deepEqual(calls.map(c => new URL(c.url).pathname).slice(-2),
+    ["/v1/evaluations/eval_1", "/v1/evaluations/eval_1/raw"]);
+});
+
+test("outputRaw reports pruned, and skips failed runs", async () => {
+  const pruned = new Response("{}", { headers: { "content-type": "application/json", "x-raw-outputs": "pruned" } });
+  const { client, calls } = script(json(ev()), pruned, json(ev("failed")), json(ev()));
+  assert.equal((await client.evaluations.retrieve("eval_1", { outputRaw: true })).raw_pruned, true);
+  assert.equal((await client.evaluations.retrieve("eval_1", { outputRaw: true })).raw, null);
+  assert.equal((await client.evaluations.retrieve("eval_1")).raw, undefined);
+  assert.equal(calls.length, 4);
+});
