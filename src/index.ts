@@ -31,4 +31,4 @@ export {
 
 export type * from "./types.js";
 
-export type { SubmissionOptions } from "./resources/evaluations.js";
+export type { SubmissionOptions, EvaluationWithRaw } from "./resources/evaluations.js";
