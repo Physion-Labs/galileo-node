@@ -120,10 +120,12 @@ export interface paths {
         /**
          * Create an evaluation
          * @description Queues a video for analysis and returns immediately. The response starts
-         *     in `queued` state. Retrieve it by ID until it reaches a terminal state.
+         *     in `queued` state, or in `pending_clip` when the uploaded clip is not yet
+         *     confirmed ready -- nothing is charged or submitted until it becomes
+         *     `queued`. Retrieve it by ID until it reaches a terminal state.
          *
-         *     The video may be at most 15 seconds and 50 MB, H.264/AVC in an MP4
-         *     container. The request body itself is capped at 2 MB, which only binds on
+         *     The video may be at most 15 seconds and 50 MB, H.264/AVC, H.265/HEVC or VP9
+         *     in an MP4 container. The request body itself is capped at 2 MB, which only binds on
          *     `b64_json` -- see `VideoRef`.
          */
         post: operations["createEvaluation"];
@@ -240,7 +242,7 @@ export interface paths {
          *     usable. Nothing is charged for the bytes you did not send.
          *
          *     This consumes an `upload` quota slot. Everything this call refuses --
-         *     a content type that is not `video/mp4`, an oversized `size_bytes`, a
+         *     a content type that is not MP4, QuickTime or WebM, an oversized `size_bytes`, a
          *     `duration_sec` over the analysis limit, or a `codec` that cannot be
          *     analyzed -- is refused before the slot is taken and before a record
          *     exists. Refusals name the limit and what to do about it; they are
@@ -268,8 +270,8 @@ export interface paths {
         /**
          * Finish an upload
          * @description Third of the three calls. Declares that the bytes have landed and hands
-         *     the file to validation, which checks the container and codec (H.264/AVC
-         *     in MP4) and the duration.
+         *     the file to validation, which checks the container and codec (H.264/AVC,
+         *     H.265/HEVC or VP9 in MP4) and the duration.
          *
          *     Validation is asynchronous: the status returned here is normally
          *     `processing`. Poll `GET /v1/videos/{video_id}` for the outcome. Calling
@@ -319,17 +321,17 @@ export interface components {
         /** @enum {string} */
         GlitchType: "visual_glitch" | "prompt_misalignment";
         /** @enum {string} */
-        EvaluationStatus: "queued" | "processing" | "completed" | "partial" | "failed";
+        EvaluationStatus: "pending_clip" | "queued" | "processing" | "completed" | "partial" | "failed";
         /** @enum {string} */
         DetectorStatus: "pending" | "reused" | "completed" | "failed" | "skipped";
         /** @enum {string} */
         VideoStatus: "pending" | "processing" | "ready" | "failed";
         VideoCreate: {
             /**
-             * @description Only MP4 is accepted.
+             * @description MP4, QuickTime (.mov) or WebM. The video inside must be H.264, H.265 (HEVC) or VP9.
              * @enum {string}
              */
-            content_type: "video/mp4";
+            content_type: "video/mp4" | "video/quicktime" | "video/webm";
             /** @description Exact size of the file you are about to send. It is signed into the grant, so the storage endpoint refuses a body that exceeds it -- an understated size fails the PUT rather than the reservation. */
             size_bytes: number;
             /** @description SHA-256 of the bytes, hex. Optional, and worth sending: when we already hold this exact content the response says `skip_upload` and there is nothing to transfer. */
@@ -388,7 +390,7 @@ export interface components {
         VideoBase64Ref: {
             /**
              * @description Base64-encoded MP4 bytes, sent inline with the request.
-             *     Bounded by the 2 MB request body limit, not by the 50 MB file limit: base64 costs a third more than the bytes it carries, so the largest clip that fits inline is roughly 1.5 MB. That is well under a typical 15-second render. Use `url` for anything larger -- a body over the limit is rejected with 413, which is a transport failure rather than a validation one and so is not in this endpoint's error list.
+             *     Bounded by the 2 MB request body limit, not by the 50 MB file limit: base64 costs a third more than the bytes it carries, so the largest clip that fits inline is roughly 1.5 MB. That is well under a typical 15-second render. Use `url` for anything larger -- a body over the limit is rejected with 413 `body_too_large`, which is raised by the body parser before any route runs. It is therefore not in this endpoint's error list: it can come back from any endpoint that takes a body, and it is permanent, so a retry of the same request is refused identically.
              */
             b64_json: string;
         };
@@ -405,7 +407,7 @@ export interface components {
         VideoRef: components["schemas"]["VideoUrlRef"] | components["schemas"]["VideoUploadRef"] | components["schemas"]["VideoBase64Ref"];
         EvaluationRequestInput: {
             video: components["schemas"]["VideoRef"];
-            /** @description What the video was meant to show. Omit it for visual-glitch detection only. A nonblank prompt also enables prompt alignment by default. */
+            /** @description What the video was meant to show. Omit it for visual-glitch detection only. A nonblank prompt also enables prompt alignment by default. Up to 500 words (whitespace-delimited); no `maxLength` is declared because the limit is counted in words, not characters. */
             prompt?: string;
         };
         /**
@@ -450,7 +452,7 @@ export interface components {
             /** @description Concrete model version to run. The deployment default applies when omitted. */
             model_version?: string;
             /**
-             * @description What the video was meant to show. OPTIONAL, and what it decides is which detectors run: send one and the clip is checked against it, omit it (or send an empty or whitespace-only string) and only `visual_glitch` runs. The run is priced accordingly — one detector instead of two — so an unprompted submission costs less.
+             * @description What the video was meant to show. OPTIONAL, and what it decides is which detectors run: send one and the clip is checked against it, omit it (or send an empty or whitespace-only string) and only `visual_glitch` runs. The run is priced accordingly — one detector instead of two — so an unprompted submission costs less. Up to 500 words (whitespace-delimited); no `maxLength` is declared because the limit is counted in words, not characters.
              *
              *     It was REQUIRED between 2026-08-27 and 2026-08-30, refusing a blank value with `missing_prompt`. That is reverted: a clip you want checked for visual defects needed a sentence invented for it, and the invented sentence was then measured against the clip by `prompt_misalignment` and billed for.
              *
@@ -569,6 +571,21 @@ export interface components {
              *     One number rather than a breakdown, deliberately. The finer measurements are the model server's own clock in its own units, and a number read from the wrong level is wrong by three orders of magnitude rather than plausibly close.
              */
             e2e_ms: number;
+            /**
+             * @description Present ONLY on a synthetic run — one submitted against the ideal-model mock — and absent from every real evaluation. It reports what the mock measured about the record it generated: `record_bytes`, the serialized size of that record, and `hold_s`, the delay the request asked it to wait.
+             *     Here because a capacity measurement has to state the payload distribution it actually saw beside whatever ceiling it found, and deriving that from the request's knobs afterwards is the wrong way round: the knobs are a range, the run had a value.
+             */
+            mock?: {
+                [key: string]: number;
+            };
+            /**
+             * @description Present ONLY on a synthetic run, alongside `mock`, and absent from every real evaluation. Where that run's time went according to the stand-in that served it: `took_s`, `admission_wait_s`, `e2e_wall_s`, `work_s`, `concurrency`.
+             *     SECONDS, on a different clock from `e2e_ms` above, which is why they are nested here rather than listed beside it. Each is smaller than `e2e_ms`, so quoting one of them as how long a run took understates the wait by exactly the queue.
+             *     A real evaluation reports `e2e_ms` alone. These are here so a capacity measurement can attribute latency by layer — the gap between our clock and the server's is only computable when both are reported — and that is a question about our own pipeline rather than about a customer's run.
+             */
+            served?: {
+                [key: string]: number;
+            };
         };
         EvaluationUsage: {
             video_seconds: number;
@@ -629,7 +646,7 @@ export interface components {
             /** @description Which try this is. 1 for a run submitted directly; 2 or more for one produced by `POST /v1/evaluations/{evaluation_id}/retry`. There is a ceiling, so a clip that keeps failing under the same instructions stops being retryable rather than being retried forever. */
             attempt?: number;
             /**
-             * @description How long this run took. NULL when nothing was measured -- which is every run settled before it was recorded, and is not backfillable.
+             * @description How long this run took. NULL when nothing was measured -- which is every run settled before it was recorded, and is not backfillable -- and NULL for every account that is not one of Physion's own: the run's measured duration is internal and is not returned to customers.
              *     Null and never 0. A run whose latency nobody recorded and a run that took no time are different claims, and only one of them is true.
              *     NOT in `required`, for the same reason `error` is not: during a rolling deploy some tasks are still the older build, and a response from one of those carries no such key. A client that enforces the contract at runtime -- the Python one does -- would raise on those responses, and it would raise only during a deploy, which is the worst time to be debugging a client. Test for a VALUE, not for the key.
              */
@@ -647,6 +664,7 @@ export interface components {
          *     This is what a pager needs. Inferring the end of a list from "was the page full" is wrong at exactly the boundary paging exists to make honest, and a bare total could not tell you the page count for a filtered view.
          */
         EvaluationCounts: {
+            pending_clip?: number;
             queued?: number;
             processing?: number;
             completed?: number;
@@ -795,7 +813,7 @@ export interface components {
         /** @enum {string} */
         ErrorType: "invalid_request_error" | "authentication_error" | "rate_limit_error" | "api_error";
         /** @enum {string} */
-        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "video_too_long" | "invalid_video" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
+        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "video_too_long" | "invalid_video" | "body_too_large" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "video_unfetchable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
         Error: {
             type: components["schemas"]["ErrorType"];
             code: components["schemas"]["ErrorCode"];
