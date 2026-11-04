@@ -53,6 +53,13 @@ test("create uploads, validates, submits and polls, without exposing the key to 
   assert.deepEqual(params.input.video, { path: clip });
 });
 
+test("create waits through pending_clip without resubmitting", async () => {
+  const { client, calls } = script(json(ev("pending_clip"), 201), json(ev("queued")), json(ev()));
+  const result = await client.evaluations.create(remote);
+  assert.equal(result.status, "completed");
+  assert.equal(calls.filter(c => c.method === "POST").length, 1);
+});
+
 for (const method of ["create", "submit"]) {
   test(`${method} never submits a rejected video`, async () => {
     const { client, calls } = script(reservation(), json({}), json(video("failed")));

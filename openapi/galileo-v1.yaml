@@ -121,10 +121,12 @@ paths:
       summary: Create an evaluation
       description: |
         Queues a video for analysis and returns immediately. The response starts
-        in `queued` state. Retrieve it by ID until it reaches a terminal state.
+        in `queued` state, or in `pending_clip` when the uploaded clip is not yet
+        confirmed ready -- nothing is charged or submitted until it becomes
+        `queued`. Retrieve it by ID until it reaches a terminal state.
 
-        The video may be at most 15 seconds and 50 MB, H.264/AVC in an MP4
-        container. The request body itself is capped at 2 MB, which only binds on
+        The video may be at most 15 seconds and 50 MB, H.264/AVC, H.265/HEVC or VP9
+        in an MP4 container. The request body itself is capped at 2 MB, which only binds on
         `b64_json` -- see `VideoRef`.
       tags: [Evaluations]
       requestBody:
@@ -371,7 +373,7 @@ paths:
         usable. Nothing is charged for the bytes you did not send.
 
         This consumes an `upload` quota slot. Everything this call refuses --
-        a content type that is not `video/mp4`, an oversized `size_bytes`, a
+        a content type that is not MP4, QuickTime or WebM, an oversized `size_bytes`, a
         `duration_sec` over the analysis limit, or a `codec` that cannot be
         analyzed -- is refused before the slot is taken and before a record
         exists. Refusals name the limit and what to do about it; they are
@@ -406,8 +408,8 @@ paths:
       summary: Finish an upload
       description: |
         Third of the three calls. Declares that the bytes have landed and hands
-        the file to validation, which checks the container and codec (H.264/AVC
-        in MP4) and the duration.
+        the file to validation, which checks the container and codec (H.264/AVC,
+        H.265/HEVC or VP9 in MP4) and the duration.
 
         Validation is asynchronous: the status returned here is normally
         `processing`. Poll `GET /v1/videos/{video_id}` for the outcome. Calling
@@ -574,7 +576,7 @@ components:
       enum: [visual_glitch, prompt_misalignment]
     EvaluationStatus:
       type: string
-      enum: [queued, processing, completed, partial, failed]
+      enum: [pending_clip, queued, processing, completed, partial, failed]
     DetectorStatus:
       type: string
       enum: [pending, reused, completed, failed, skipped]
@@ -588,8 +590,10 @@ components:
       properties:
         content_type:
           type: string
-          enum: [video/mp4]
-          description: Only MP4 is accepted.
+          enum: [video/mp4, video/quicktime, video/webm]
+          description: >-
+            MP4, QuickTime (.mov) or WebM. The video inside must be H.264,
+            H.265 (HEVC) or VP9.
         size_bytes:
           type: integer
           minimum: 1
@@ -715,8 +719,11 @@ components:
             base64 costs a third more than the bytes it carries, so the largest
             clip that fits inline is roughly 1.5 MB. That is well under a typical
             15-second render. Use `url` for anything larger -- a body over the
-            limit is rejected with 413, which is a transport failure rather than
-            a validation one and so is not in this endpoint's error list.
+            limit is rejected with 413 `body_too_large`, which is raised by the
+            body parser before any route runs. It is therefore not in this
+            endpoint's error list: it can come back from any endpoint that takes
+            a body, and it is permanent, so a retry of the same request is
+            refused identically.
     VideoUploadRef:
       type: object
       additionalProperties: false
@@ -756,10 +763,11 @@ components:
           $ref: "#/components/schemas/VideoRef"
         prompt:
           type: string
-          maxLength: 2500
           description: >-
             What the video was meant to show. Omit it for visual-glitch detection
             only. A nonblank prompt also enables prompt alignment by default.
+            Up to 500 words (whitespace-delimited); no `maxLength` is declared
+            because the limit is counted in words, not characters.
     EvaluationCreate:
       type: object
       additionalProperties: false
@@ -805,13 +813,14 @@ components:
           description: Concrete model version to run. The deployment default applies when omitted.
         prompt:
           type: string
-          maxLength: 2500
           description: >-
             What the video was meant to show. OPTIONAL, and what it decides is
             which detectors run: send one and the clip is checked against it,
             omit it (or send an empty or whitespace-only string) and only
             `visual_glitch` runs. The run is priced accordingly — one detector
-            instead of two — so an unprompted submission costs less.
+            instead of two — so an unprompted submission costs less. Up to 500
+            words (whitespace-delimited); no `maxLength` is declared because
+            the limit is counted in words, not characters.
 
 
             It was REQUIRED between 2026-08-27 and 2026-08-30, refusing a blank
@@ -1050,6 +1059,41 @@ components:
             measurements are the model server's own clock in its own units, and a
             number read from the wrong level is wrong by three orders of
             magnitude rather than plausibly close.
+        mock:
+          type: object
+          additionalProperties:
+            type: number
+          description: >-
+            Present ONLY on a synthetic run — one submitted against the
+            ideal-model mock — and absent from every real evaluation. It reports
+            what the mock measured about the record it generated: `record_bytes`,
+            the serialized size of that record, and `hold_s`, the delay the
+            request asked it to wait.
+
+            Here because a capacity measurement has to state the payload
+            distribution it actually saw beside whatever ceiling it found, and
+            deriving that from the request's knobs afterwards is the wrong way
+            round: the knobs are a range, the run had a value.
+        served:
+          type: object
+          additionalProperties:
+            type: number
+          description: >-
+            Present ONLY on a synthetic run, alongside `mock`, and absent from
+            every real evaluation. Where that run's time went according to the
+            stand-in that served it: `took_s`, `admission_wait_s`, `e2e_wall_s`,
+            `work_s`, `concurrency`.
+
+            SECONDS, on a different clock from `e2e_ms` above, which is why they
+            are nested here rather than listed beside it. Each is smaller than
+            `e2e_ms`, so quoting one of them as how long a run took understates
+            the wait by exactly the queue.
+
+            A real evaluation reports `e2e_ms` alone. These are here so a
+            capacity measurement can attribute latency by layer — the gap
+            between our clock and the server's is only computable when both are
+            reported — and that is a question about our own pipeline rather than
+            about a customer's run.
     EvaluationUsage:
       type: object
       additionalProperties: false
@@ -1194,7 +1238,10 @@ components:
         timing:
           description: >-
             How long this run took. NULL when nothing was measured -- which is
-            every run settled before it was recorded, and is not backfillable.
+            every run settled before it was recorded, and is not backfillable --
+            and NULL for every account that is not one of Physion's own: the
+            run's measured duration is internal and is not returned to
+            customers.
 
             Null and never 0. A run whose latency nobody recorded and a run that
             took no time are different claims, and only one of them is true.
@@ -1234,6 +1281,7 @@ components:
         type: integer
         minimum: 0
       properties:
+        pending_clip: { type: integer, minimum: 0 }
         queued: { type: integer, minimum: 0 }
         processing: { type: integer, minimum: 0 }
         completed: { type: integer, minimum: 0 }
@@ -1506,6 +1554,10 @@ components:
         - invalid_glitch_types
         - video_too_long
         - invalid_video
+        # 413, and the only code here that is not raised by a handler: the body
+        # parser refuses the request before any route sees it, so it can come
+        # back from any endpoint that takes a body. See `VideoBase64Ref`.
+        - body_too_large
         - not_found
         - not_implemented
         - insufficient_credits
@@ -1516,6 +1568,7 @@ components:
         - concurrency_limit
         - internal_error
         - model_unavailable
+        - video_unfetchable
         - model_output_invalid
         - model_timeout
         - run_abandoned
