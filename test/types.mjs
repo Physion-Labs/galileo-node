@@ -38,3 +38,26 @@ void legacy.evaluations.createAndWait({ prompt: "A ball rolls.", video: { url: "
     assert.fail(e.stdout?.toString() ?? e.message);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("galileo-pm is a model id the declarations accept", () => {
+  // rc.8's ModelId was "galileo-1.0" | "galileo", so a TypeScript caller could
+  // not name galileo-pm, nor narrow a listed model to it, without a cast.
+  const dir = mkdtempSync(join(tmpdir(), "galileo-types-"));
+  try {
+    const file = join(dir, "pm.ts");
+    writeFileSync(file, `
+import { Client, type ModelId, type ModelList } from "${join(root, "dist", "index.js")}";
+const client = new Client({ apiKey: "test" });
+void client.evaluations.create({ model: "galileo-pm", input: { video: { url: "https://example.com/v.mp4" }, prompt: "A ball rolls." } });
+const id: ModelId = "galileo-pm";
+declare const list: ModelList;
+void list.data.filter((m) => m.id === "galileo-pm");
+void id;
+`);
+    execFileSync("pnpm", ["exec", "tsc", "--noEmit", "--strict", "--target", "ES2022",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext", "--skipLibCheck", file],
+      { cwd: root, stdio: "pipe" });
+  } catch (e) {
+    assert.fail(e.stdout?.toString() ?? e.message);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
