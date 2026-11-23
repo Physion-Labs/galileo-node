@@ -149,3 +149,17 @@ test("outputRaw reports pruned, and skips failed runs", async () => {
   assert.equal((await client.evaluations.retrieve("eval_1")).raw, undefined);
   assert.equal(calls.length, 4);
 });
+
+test("models() returns galileo-pm, and create sends it", async () => {
+  const pm = { id: "galileo-pm", object: "model", version: null, detectors: ["prompt_misalignment"],
+    input: { formats: ["video/mp4 (H.264 / H.265 (HEVC) / VP9)"], max_duration_sec: 15, max_file_bytes: 52428800 } };
+  const done = { ...ev(), model: "galileo-pm" };
+  const { client, calls } = script(json({ object: "list", data: [pm] }),
+    json({ ...done, status: "queued" }), json(done));
+  const models = await client.account.models();
+  assert.deepEqual(models.data.map((m) => m.id), ["galileo-pm"]);
+  const result = await client.evaluations.create({ model: "galileo-pm",
+    input: { video: { url: "https://example.com/v.mp4" }, prompt: "A ball rolls." } });
+  assert.equal(JSON.parse(calls[1].body).model, "galileo-pm");
+  assert.equal(result.model, "galileo-pm");
+});

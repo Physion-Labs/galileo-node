@@ -68,7 +68,11 @@ paths:
     get:
       operationId: listModels
       summary: List available models
-      description: Returns the models and concrete builds offered by this deployment.
+      description: >-
+        Returns the models and concrete builds offered by this deployment.
+        `data` lists each model you can name in `model`, with the detectors it
+        runs: `galileo` runs `visual_glitch` and `prompt_misalignment`;
+        `galileo-pm` runs `prompt_misalignment` only.
       tags: [Platform]
       responses:
         "200":
@@ -568,9 +572,18 @@ components:
   schemas:
     ModelId:
       type: string
-      enum: [galileo-1.0, galileo]
+      enum: [galileo-1.0, galileo, galileo-pm]
       default: galileo-1.0
-      description: Galileo 1.0. The legacy name galileo remains accepted.
+      description: >-
+        `galileo-1.0` (also accepted as `galileo`) checks visual glitches and,
+        with a prompt, prompt alignment. Evaluations report it as `galileo`.
+
+
+        `galileo-pm` checks prompt alignment only. It requires a nonblank
+        prompt, runs only `prompt_misalignment`, and refuses `visual_glitch` in
+        `glitch_types` with `400 unsupported_glitch_type`. It has its own price
+        (`PricingRates.per_second_per_run_by_model`) and its own concurrency
+        allowance (`AccountLimits.max_concurrent_jobs_by_model`).
     GlitchType:
       type: string
       enum: [visual_glitch, prompt_misalignment]
@@ -766,6 +779,8 @@ components:
           description: >-
             What the video was meant to show. Omit it for visual-glitch detection
             only. A nonblank prompt also enables prompt alignment by default.
+            Required with `galileo-pm`, which checks prompt alignment only: a
+            missing or blank prompt is refused with `400 missing_prompt`.
             Up to 500 words (whitespace-delimited); no `maxLength` is declared
             because the limit is counted in words, not characters.
     EvaluationCreate:
@@ -787,13 +802,22 @@ components:
           uniqueItems: true
           items:
             $ref: "#/components/schemas/GlitchType"
-          description: Detectors to run. Defaults to those supported by the supplied prompt.
+          description: >-
+            Detectors to run. Defaults to those supported by the supplied prompt
+            and the chosen model. Only detectors the model runs are accepted
+            (its `detectors` in `GET /v1/models`): `visual_glitch` with
+            `galileo-pm` is refused with `400 unsupported_glitch_type`.
         metadata:
           type: object
           additionalProperties: true
           description: JSON metadata echoed on the evaluation; at most 8192 serialized bytes.
       examples:
         - model: galileo-1.0
+          input:
+            video:
+              url: https://cdn.example.com/red-ball.mp4
+            prompt: A red ball rolls off a table and bounces twice.
+        - model: galileo-pm
           input:
             video:
               url: https://cdn.example.com/red-ball.mp4
@@ -1340,6 +1364,14 @@ components:
         requests_per_min: { type: integer, minimum: 0 }
         window_sec: { type: integer, minimum: 1 }
         max_concurrent_jobs: { type: integer, minimum: 1 }
+        max_concurrent_jobs_by_model:
+          type: object
+          additionalProperties: { type: integer, minimum: 1 }
+          description: >-
+            Present when the deployment offers a model with a concurrency
+            allowance of its own (`galileo-pm`). Lists each model's allowance;
+            `galileo`'s equals `max_concurrent_jobs`. Runs on one model never
+            count against another's allowance.
         rate_limits:
           type: object
           required: [detect, generate, upload]
@@ -1413,6 +1445,18 @@ components:
     Model:
       type: object
       required: [id, object, version, detectors, input]
+      examples:
+        - id: galileo-pm
+          object: model
+          version: null
+          detectors: [prompt_misalignment]
+          input:
+            formats:
+              - video/mp4 (H.264 / H.265 (HEVC) / VP9)
+              - video/quicktime (H.264 / H.265 (HEVC) / VP9)
+              - video/webm (H.264 / H.265 (HEVC) / VP9)
+            max_duration_sec: 15
+            max_file_bytes: 52428800
       properties:
         id:
           $ref: "#/components/schemas/ModelId"
@@ -1432,6 +1476,10 @@ components:
             is the one to read.
         detectors:
           type: array
+          description: >-
+            The detectors this model runs, and so the values its `glitch_types`
+            may take. `["visual_glitch", "prompt_misalignment"]` for `galileo`,
+            `["prompt_misalignment"]` for `galileo-pm`.
           items:
             $ref: "#/components/schemas/GlitchType"
         input:
@@ -1499,6 +1547,17 @@ components:
             whole price: the per-detector fields and the cache multiplier stop
             applying. Check `flat_per_run` first, then this, and only then the
             per-detector fields.
+        per_second_per_run_by_model:
+          type: object
+          additionalProperties: { type: number, minimum: 0 }
+          description: >-
+            Credits per second of clip for a model with a price of its own,
+            keyed by model. When the run's model is listed here, this is the
+            whole price and is checked before every other field: the clip's
+            duration rounded to the nearest whole second (at least 1), times
+            this rate, rounded up to a whole credit, never below 1 credit. `galileo-pm` is $0.04 per minute of clip
+            (`0.04 * 100 / 60` credits per second), so any clip up to 15 seconds
+            costs 1 credit ($0.01).
     Credits:
       type: object
       required: [credits, usd, pricing, unlimited, per_generated_sec]
@@ -1552,6 +1611,9 @@ components:
         - prompt_too_long
         - prompt_refused
         - invalid_glitch_types
+        # 400. A real detector that the chosen model does not run: `galileo-pm`
+        # asked for `visual_glitch`. Refused before anything is charged.
+        - unsupported_glitch_type
         - video_too_long
         - invalid_video
         # 413, and the only code here that is not raised by a handler: the body

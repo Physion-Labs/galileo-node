@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * List available models
-         * @description Returns the models and concrete builds offered by this deployment.
+         * @description Returns the models and concrete builds offered by this deployment. `data` lists each model you can name in `model`, with the detectors it runs: `galileo` runs `visual_glitch` and `prompt_misalignment`; `galileo-pm` runs `prompt_misalignment` only.
          */
         get: operations["listModels"];
         put?: never;
@@ -313,11 +313,13 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description Galileo 1.0. The legacy name galileo remains accepted.
+         * @description `galileo-1.0` (also accepted as `galileo`) checks visual glitches and, with a prompt, prompt alignment. Evaluations report it as `galileo`.
+         *
+         *     `galileo-pm` checks prompt alignment only. It requires a nonblank prompt, runs only `prompt_misalignment`, and refuses `visual_glitch` in `glitch_types` with `400 unsupported_glitch_type`. It has its own price (`PricingRates.per_second_per_run_by_model`) and its own concurrency allowance (`AccountLimits.max_concurrent_jobs_by_model`).
          * @default galileo-1.0
          * @enum {string}
          */
-        ModelId: "galileo-1.0" | "galileo";
+        ModelId: "galileo-1.0" | "galileo" | "galileo-pm";
         /** @enum {string} */
         GlitchType: "visual_glitch" | "prompt_misalignment";
         /** @enum {string} */
@@ -407,12 +409,21 @@ export interface components {
         VideoRef: components["schemas"]["VideoUrlRef"] | components["schemas"]["VideoUploadRef"] | components["schemas"]["VideoBase64Ref"];
         EvaluationRequestInput: {
             video: components["schemas"]["VideoRef"];
-            /** @description What the video was meant to show. Omit it for visual-glitch detection only. A nonblank prompt also enables prompt alignment by default. Up to 500 words (whitespace-delimited); no `maxLength` is declared because the limit is counted in words, not characters. */
+            /** @description What the video was meant to show. Omit it for visual-glitch detection only. A nonblank prompt also enables prompt alignment by default. Required with `galileo-pm`, which checks prompt alignment only: a missing or blank prompt is refused with `400 missing_prompt`. Up to 500 words (whitespace-delimited); no `maxLength` is declared because the limit is counted in words, not characters. */
             prompt?: string;
         };
         /**
          * @example {
          *       "model": "galileo-1.0",
+         *       "input": {
+         *         "video": {
+         *           "url": "https://cdn.example.com/red-ball.mp4"
+         *         },
+         *         "prompt": "A red ball rolls off a table and bounces twice."
+         *       }
+         *     }
+         * @example {
+         *       "model": "galileo-pm",
          *       "input": {
          *         "video": {
          *           "url": "https://cdn.example.com/red-ball.mp4"
@@ -426,7 +437,7 @@ export interface components {
             input: components["schemas"]["EvaluationRequestInput"];
             /** @description Optional concrete serving version pin; separate from the public model name. */
             model_version?: string;
-            /** @description Detectors to run. Defaults to those supported by the supplied prompt. */
+            /** @description Detectors to run. Defaults to those supported by the supplied prompt and the chosen model. Only detectors the model runs are accepted (its `detectors` in `GET /v1/models`): `visual_glitch` with `galileo-pm` is refused with `400 unsupported_glitch_type`. */
             glitch_types?: components["schemas"]["GlitchType"][];
             /** @description JSON metadata echoed on the evaluation; at most 8192 serialized bytes. */
             metadata?: {
@@ -700,6 +711,10 @@ export interface components {
             requests_per_min: number;
             window_sec: number;
             max_concurrent_jobs: number;
+            /** @description Present when the deployment offers a model with a concurrency allowance of its own (`galileo-pm`). Lists each model's allowance; `galileo`'s equals `max_concurrent_jobs`. Runs on one model never count against another's allowance. */
+            max_concurrent_jobs_by_model?: {
+                [key: string]: number;
+            };
             rate_limits: {
                 detect: components["schemas"]["RateLimitDefinition"];
                 generate: components["schemas"]["RateLimitDefinition"];
@@ -745,6 +760,25 @@ export interface components {
             version: string | null;
             note?: string;
         };
+        /**
+         * @example {
+         *       "id": "galileo-pm",
+         *       "object": "model",
+         *       "version": null,
+         *       "detectors": [
+         *         "prompt_misalignment"
+         *       ],
+         *       "input": {
+         *         "formats": [
+         *           "video/mp4 (H.264 / H.265 (HEVC) / VP9)",
+         *           "video/quicktime (H.264 / H.265 (HEVC) / VP9)",
+         *           "video/webm (H.264 / H.265 (HEVC) / VP9)"
+         *         ],
+         *         "max_duration_sec": 15,
+         *         "max_file_bytes": 52428800
+         *       }
+         *     }
+         */
         Model: {
             id: components["schemas"]["ModelId"];
             /** @constant */
@@ -754,6 +788,7 @@ export interface components {
              *     Null is the current answer for `galileo` and will stay so while it is the default: the version belongs to the cluster serving it, and answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
              */
             version: string | null;
+            /** @description The detectors this model runs, and so the values its `glitch_types` may take. `["visual_glitch", "prompt_misalignment"]` for `galileo`, `["prompt_misalignment"]` for `galileo-pm`. */
             detectors: components["schemas"]["GlitchType"][];
             input: {
                 formats: string[];
@@ -783,6 +818,10 @@ export interface components {
             flat_per_run?: number;
             /** @description What one second of clip costs for the whole analysis, whichever detectors run — 1 credit ($0.01) per second on the current card. The price of a run is this times the clip's duration rounded UP to a whole second, floored at `minimum`. Like `flat_per_run` it is the whole price: the per-detector fields and the cache multiplier stop applying. Check `flat_per_run` first, then this, and only then the per-detector fields. */
             per_second_per_run?: number;
+            /** @description Credits per second of clip for a model with a price of its own, keyed by model. When the run's model is listed here, this is the whole price and is checked before every other field: the clip's duration rounded to the nearest whole second (at least 1), times this rate, rounded up to a whole credit, never below 1 credit. `galileo-pm` is $0.04 per minute of clip (`0.04 * 100 / 60` credits per second), so any clip up to 15 seconds costs 1 credit ($0.01). */
+            per_second_per_run_by_model?: {
+                [key: string]: number;
+            };
         };
         Credits: {
             credits: number;
@@ -813,7 +852,7 @@ export interface components {
         /** @enum {string} */
         ErrorType: "invalid_request_error" | "authentication_error" | "rate_limit_error" | "api_error";
         /** @enum {string} */
-        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "video_too_long" | "invalid_video" | "body_too_large" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "video_unfetchable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
+        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "unsupported_glitch_type" | "video_too_long" | "invalid_video" | "body_too_large" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "video_unfetchable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
         Error: {
             type: components["schemas"]["ErrorType"];
             code: components["schemas"]["ErrorCode"];
