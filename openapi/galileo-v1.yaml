@@ -69,10 +69,9 @@ paths:
       operationId: listModels
       summary: List available models
       description: >-
-        Returns the models and concrete builds offered by this deployment.
+        Returns the models and concrete builds you can use with this key.
         `data` lists each model you can name in `model`, with the detectors it
-        runs: `galileo` runs `visual_glitch` and `prompt_misalignment`;
-        `galileo-pm` runs `prompt_misalignment` only.
+        runs: `galileo-pm`, which runs `prompt_misalignment` only.
       tags: [Platform]
       responses:
         "200":
@@ -572,18 +571,25 @@ components:
   schemas:
     ModelId:
       type: string
-      enum: [galileo-1.0, galileo, galileo-pm]
-      default: galileo-1.0
+      enum: [galileo-pm]
+      default: galileo-pm
       description: >-
-        `galileo-1.0` (also accepted as `galileo`) checks visual glitches and,
-        with a prompt, prompt alignment. Evaluations report it as `galileo`.
+        The API model. `galileo-pm` checks prompt alignment only. It requires a
+        nonblank prompt, runs only `prompt_misalignment`, and refuses
+        `visual_glitch` in `glitch_types` with `400 unsupported_glitch_type`.
+        It has its own price (`PricingRates.per_second_per_run_by_model`).
+        Omitting `model` means `galileo-pm`.
 
 
-        `galileo-pm` checks prompt alignment only. It requires a nonblank
-        prompt, runs only `prompt_misalignment`, and refuses `visual_glitch` in
-        `glitch_types` with `400 unsupported_glitch_type`. It has its own price
-        (`PricingRates.per_second_per_run_by_model`) and its own concurrency
-        allowance (`AccountLimits.max_concurrent_jobs_by_model`).
+        `galileo-1.0` and `galileo` are not available on the API and are
+        refused with `400 model_not_available` before anything is charged.
+    EvaluationModelId:
+      type: string
+      enum: [galileo, galileo-pm]
+      description: >-
+        The model an evaluation ran. `galileo-pm` for every evaluation
+        submitted with an API key since 2026-11-23; `galileo` appears on
+        evaluations created earlier, or in the console.
     GlitchType:
       type: string
       enum: [visual_glitch, prompt_misalignment]
@@ -812,11 +818,6 @@ components:
           additionalProperties: true
           description: JSON metadata echoed on the evaluation; at most 8192 serialized bytes.
       examples:
-        - model: galileo-1.0
-          input:
-            video:
-              url: https://cdn.example.com/red-ball.mp4
-            prompt: A red ball rolls off a table and bounces twice.
         - model: galileo-pm
           input:
             video:
@@ -1184,7 +1185,7 @@ components:
           type: string
           const: evaluation
         model:
-          $ref: "#/components/schemas/ModelId"
+          $ref: "#/components/schemas/EvaluationModelId"
         model_version: { type: string }
         output_schema_version: { type: string }
         created:
@@ -1368,10 +1369,9 @@ components:
           type: object
           additionalProperties: { type: integer, minimum: 1 }
           description: >-
-            Present when the deployment offers a model with a concurrency
-            allowance of its own (`galileo-pm`). Lists each model's allowance;
-            `galileo`'s equals `max_concurrent_jobs`. Runs on one model never
-            count against another's allowance.
+            Not returned to API keys, whose `max_concurrent_jobs` is already
+            the `galileo-pm` allowance. Present for console sessions when the
+            deployment offers more than one model with its own allowance.
         rate_limits:
           type: object
           required: [detect, generate, upload]
@@ -1435,8 +1435,7 @@ components:
           description: >-
             The build the model runs, or NULL when that is not ours to state.
 
-            Null is the current answer for `galileo` and will stay so while it is
-            the default: the version belongs to the cluster serving it, and
+            Null when the version belongs to the cluster serving the model:
             answering from our side would mean publishing a number nobody checked.
             Nothing keys a run on this -- an evaluation carries its own
             `model_version`, taken from the submission that resolved it, and that
@@ -1468,8 +1467,7 @@ components:
           description: >-
             The build the model runs, or NULL when that is not ours to state.
 
-            Null is the current answer for `galileo` and will stay so while it is
-            the default: the version belongs to the cluster serving it, and
+            Null when the version belongs to the cluster serving the model:
             answering from our side would mean publishing a number nobody checked.
             Nothing keys a run on this -- an evaluation carries its own
             `model_version`, taken from the submission that resolved it, and that
@@ -1478,8 +1476,7 @@ components:
           type: array
           description: >-
             The detectors this model runs, and so the values its `glitch_types`
-            may take. `["visual_glitch", "prompt_misalignment"]` for `galileo`,
-            `["prompt_misalignment"]` for `galileo-pm`.
+            may take. `["prompt_misalignment"]` for `galileo-pm`.
           items:
             $ref: "#/components/schemas/GlitchType"
         input:
@@ -1614,6 +1611,10 @@ components:
         # 400. A real detector that the chosen model does not run: `galileo-pm`
         # asked for `visual_glitch`. Refused before anything is charged.
         - unsupported_glitch_type
+        # 400. The model exists but is not available on the API
+        # (`galileo-1.0` / `galileo`). `galileo-pm` is the API model. Refused
+        # before anything is charged.
+        - model_not_available
         - video_too_long
         - invalid_video
         # 413, and the only code here that is not raised by a handler: the body

@@ -14,19 +14,21 @@ test("Client accepts local/remote input, optional prompt, and keeps legacy Galil
     writeFileSync(file, `
 import Galileo, { Client, type EvaluationCreateParams } from "${join(root, "dist", "index.js")}";
 const client = new Client({ apiKey: "test" });
-void client.evaluations.create({ model: "galileo-1.0", input: { video: { path: "./video.mp4" }, prompt: "A ball rolls." } });
-void client.evaluations.create({ model: "galileo-1.0", input: { video: { url: "https://example.com/v.mp4" } } });
-void client.evaluations.submit({ model: "galileo-1.0", input: { video: { upload_id: "vid_1" } } });
-// @ts-expect-error model is required
-void client.evaluations.create({ input: { video: { path: "x" } } });
+void client.evaluations.create({ model: "galileo-pm", input: { video: { path: "./video.mp4" }, prompt: "A ball rolls." } });
+void client.evaluations.create({ model: "galileo-pm", input: { video: { url: "https://example.com/v.mp4" } } });
+void client.evaluations.submit({ model: "galileo-pm", input: { video: { upload_id: "vid_1" } } });
+// model may be omitted; it defaults to galileo-pm
+void client.evaluations.create({ input: { video: { path: "x" }, prompt: "x" } });
+// @ts-expect-error galileo-1.0 is not an API model
+void client.evaluations.create({ model: "galileo-1.0", input: { video: { path: "x" }, prompt: "x" } });
 // @ts-expect-error video is required
-void client.evaluations.create({ model: "galileo-1.0", input: { prompt: "x" } });
+void client.evaluations.create({ model: "galileo-pm", input: { prompt: "x" } });
 // @ts-expect-error use nested input
-void client.evaluations.create({ model: "galileo-1.0", video: { url: "x" } });
+void client.evaluations.create({ model: "galileo-pm", video: { url: "x" } });
 // @ts-expect-error a video reference has one source
-void client.evaluations.create({ model: "galileo-1.0", input: { video: { path: "x", url: "https://example.com/x" } } });
+void client.evaluations.create({ model: "galileo-pm", input: { video: { path: "x", url: "https://example.com/x" } } });
 // @ts-expect-error unknown input fields must not silently disappear
-void client.evaluations.create({ model: "galileo-1.0", input: { video: { path: "x" }, promt: "x" } });
+void client.evaluations.create({ model: "galileo-pm", input: { video: { path: "x" }, promt: "x" } });
 const legacy = new Galileo({ apiKey: "test" });
 void legacy.evaluations.create({ video: { url: "https://example.com/v.mp4" } });
 void legacy.evaluations.createAndWait({ prompt: "A ball rolls.", video: { url: "https://example.com/v.mp4" } });
@@ -40,7 +42,7 @@ void legacy.evaluations.createAndWait({ prompt: "A ball rolls.", video: { url: "
 });
 
 test("galileo-pm is a model id the declarations accept", () => {
-  // rc.8's ModelId was "galileo-1.0" | "galileo", so a TypeScript caller could
+  // rc.8's ModelId was "galileo-pm" | "galileo", so a TypeScript caller could
   // not name galileo-pm, nor narrow a listed model to it, without a cast.
   const dir = mkdtempSync(join(tmpdir(), "galileo-types-"));
   try {

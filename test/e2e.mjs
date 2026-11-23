@@ -63,7 +63,7 @@ test("models, quota and credits all answer", authed, async () => {
     galileo.account.credits(),
   ]);
   assert.ok(models.data.length > 0, "the catalogue is empty");
-  assert.ok(models.data.some((m) => m.id === "galileo"));
+  assert.ok(models.data.some((m) => m.id === "galileo-pm"));
   assert.ok(quota);
   assert.equal(typeof credits.credits, "number");
 });
