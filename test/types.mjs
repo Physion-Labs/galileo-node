@@ -63,3 +63,22 @@ void id;
     assert.fail(e.stdout?.toString() ?? e.message);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a listed model may be galileo, as internal accounts see it", () => {
+  // Model.id is EvaluationModelId, not the request-only ModelId: comparing it
+  // to "galileo" must compile.
+  const dir = mkdtempSync(join(tmpdir(), "galileo-types-"));
+  try {
+    const file = join(dir, "listed.ts");
+    writeFileSync(file, `
+import type { ModelList } from "${join(root, "dist", "index.js")}";
+declare const list: ModelList;
+void list.data.filter((m) => m.id === "galileo");
+`);
+    execFileSync("pnpm", ["exec", "tsc", "--noEmit", "--strict", "--target", "ES2022",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext", "--skipLibCheck", file],
+      { cwd: root, stdio: "pipe" });
+  } catch (e) {
+    assert.fail(e.stdout?.toString() ?? e.message);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

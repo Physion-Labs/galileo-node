@@ -776,7 +776,8 @@ export interface components {
          *     }
          */
         Model: {
-            id: components["schemas"]["ModelId"];
+            /** @description An API key on a customer plan sees `galileo-pm` only. Internal accounts also see `galileo`, so a client must not reject it. */
+            id: components["schemas"]["EvaluationModelId"];
             /** @constant */
             object: "model";
             /**
