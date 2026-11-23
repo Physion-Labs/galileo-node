@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * List available models
-         * @description Returns the models and concrete builds offered by this deployment. `data` lists each model you can name in `model`, with the detectors it runs: `galileo` runs `visual_glitch` and `prompt_misalignment`; `galileo-pm` runs `prompt_misalignment` only.
+         * @description Returns the models and concrete builds you can use with this key. `data` lists each model you can name in `model`, with the detectors it runs: `galileo-pm`, which runs `prompt_misalignment` only.
          */
         get: operations["listModels"];
         put?: never;
@@ -313,13 +313,18 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description `galileo-1.0` (also accepted as `galileo`) checks visual glitches and, with a prompt, prompt alignment. Evaluations report it as `galileo`.
+         * @description The API model. `galileo-pm` checks prompt alignment only. It requires a nonblank prompt, runs only `prompt_misalignment`, and refuses `visual_glitch` in `glitch_types` with `400 unsupported_glitch_type`. It has its own price (`PricingRates.per_second_per_run_by_model`). Omitting `model` means `galileo-pm`.
          *
-         *     `galileo-pm` checks prompt alignment only. It requires a nonblank prompt, runs only `prompt_misalignment`, and refuses `visual_glitch` in `glitch_types` with `400 unsupported_glitch_type`. It has its own price (`PricingRates.per_second_per_run_by_model`) and its own concurrency allowance (`AccountLimits.max_concurrent_jobs_by_model`).
-         * @default galileo-1.0
+         *     `galileo-1.0` and `galileo` are not available on the API and are refused with `400 model_not_available` before anything is charged.
+         * @default galileo-pm
          * @enum {string}
          */
-        ModelId: "galileo-1.0" | "galileo" | "galileo-pm";
+        ModelId: "galileo-pm";
+        /**
+         * @description The model an evaluation ran. `galileo-pm` for every evaluation submitted with an API key since 2026-11-23; `galileo` appears on evaluations created earlier, or in the console.
+         * @enum {string}
+         */
+        EvaluationModelId: "galileo" | "galileo-pm";
         /** @enum {string} */
         GlitchType: "visual_glitch" | "prompt_misalignment";
         /** @enum {string} */
@@ -413,15 +418,6 @@ export interface components {
             prompt?: string;
         };
         /**
-         * @example {
-         *       "model": "galileo-1.0",
-         *       "input": {
-         *         "video": {
-         *           "url": "https://cdn.example.com/red-ball.mp4"
-         *         },
-         *         "prompt": "A red ball rolls off a table and bounces twice."
-         *       }
-         *     }
          * @example {
          *       "model": "galileo-pm",
          *       "input": {
@@ -626,7 +622,7 @@ export interface components {
             id: string;
             /** @constant */
             object: "evaluation";
-            model: components["schemas"]["ModelId"];
+            model: components["schemas"]["EvaluationModelId"];
             model_version: string;
             output_schema_version: string;
             /** @description Unix timestamp in seconds. */
@@ -711,7 +707,7 @@ export interface components {
             requests_per_min: number;
             window_sec: number;
             max_concurrent_jobs: number;
-            /** @description Present when the deployment offers a model with a concurrency allowance of its own (`galileo-pm`). Lists each model's allowance; `galileo`'s equals `max_concurrent_jobs`. Runs on one model never count against another's allowance. */
+            /** @description Not returned to API keys, whose `max_concurrent_jobs` is already the `galileo-pm` allowance. Present for console sessions when the deployment offers more than one model with its own allowance. */
             max_concurrent_jobs_by_model?: {
                 [key: string]: number;
             };
@@ -755,7 +751,7 @@ export interface components {
             label: string;
             /**
              * @description The build the model runs, or NULL when that is not ours to state.
-             *     Null is the current answer for `galileo` and will stay so while it is the default: the version belongs to the cluster serving it, and answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
+             *     Null when the version belongs to the cluster serving the model: answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
              */
             version: string | null;
             note?: string;
@@ -780,15 +776,16 @@ export interface components {
          *     }
          */
         Model: {
-            id: components["schemas"]["ModelId"];
+            /** @description An API key on a customer plan sees `galileo-pm` only. Internal accounts also see `galileo`, so a client must not reject it. */
+            id: components["schemas"]["EvaluationModelId"];
             /** @constant */
             object: "model";
             /**
              * @description The build the model runs, or NULL when that is not ours to state.
-             *     Null is the current answer for `galileo` and will stay so while it is the default: the version belongs to the cluster serving it, and answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
+             *     Null when the version belongs to the cluster serving the model: answering from our side would mean publishing a number nobody checked. Nothing keys a run on this -- an evaluation carries its own `model_version`, taken from the submission that resolved it, and that is the one to read.
              */
             version: string | null;
-            /** @description The detectors this model runs, and so the values its `glitch_types` may take. `["visual_glitch", "prompt_misalignment"]` for `galileo`, `["prompt_misalignment"]` for `galileo-pm`. */
+            /** @description The detectors this model runs, and so the values its `glitch_types` may take. `["prompt_misalignment"]` for `galileo-pm`. */
             detectors: components["schemas"]["GlitchType"][];
             input: {
                 formats: string[];
@@ -852,7 +849,7 @@ export interface components {
         /** @enum {string} */
         ErrorType: "invalid_request_error" | "authentication_error" | "rate_limit_error" | "api_error";
         /** @enum {string} */
-        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "unsupported_glitch_type" | "video_too_long" | "invalid_video" | "body_too_large" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "video_unfetchable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
+        ErrorCode: "invalid_body" | "unknown_model" | "missing_video" | "missing_prompt" | "prompt_too_long" | "prompt_refused" | "invalid_glitch_types" | "unsupported_glitch_type" | "model_not_available" | "video_too_long" | "invalid_video" | "body_too_large" | "not_found" | "not_implemented" | "insufficient_credits" | "missing_api_key" | "invalid_api_key" | "unauthenticated" | "rate_limited" | "concurrency_limit" | "internal_error" | "model_unavailable" | "video_unfetchable" | "model_output_invalid" | "model_timeout" | "run_abandoned";
         Error: {
             type: components["schemas"]["ErrorType"];
             code: components["schemas"]["ErrorCode"];

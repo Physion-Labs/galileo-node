@@ -18,7 +18,9 @@ type ExclusiveVideo<T = VideoSource> = T extends unknown
   : never;
 export type VideoInput = ExclusiveVideo;
 export type EvaluationInput = Omit<Schemas["EvaluationRequestInput"], "video"> & { video: VideoInput };
-export type EvaluationCreateParams = Omit<Schemas["EvaluationCreate"], "input"> & {
+export type EvaluationCreateParams = Omit<Schemas["EvaluationCreate"], "input" | "model"> & {
+  /** Defaults to `galileo-pm`, the model the API offers to API keys. */
+  model?: Schemas["ModelId"];
   input: EvaluationInput;
 };
 export type EvaluationList = Schemas["EvaluationList"];
@@ -88,6 +90,8 @@ export type RateLimitDefinition = Schemas["RateLimitDefinition"];
 
 export type Model = Schemas["Model"];
 export type ModelId = Schemas["ModelId"];
+/** The model an evaluation ran: `galileo-pm`, or `galileo` on older evaluations. */
+export type EvaluationModelId = Schemas["EvaluationModelId"];
 export type ModelBuild = Schemas["ModelBuild"];
 export type ModelList = Schemas["ModelList"];
 

@@ -8,10 +8,10 @@ import { Client, InvalidRequestError, PollTimeoutError, ServerError } from "../d
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "content-type": "application/json" },
 });
-const ev = (status = "completed") => ({ id: "eval_1", model: "galileo-1.0", status, result: null });
+const ev = (status = "completed") => ({ id: "eval_1", model: "galileo-pm", status, result: null });
 const video = (status = "ready") => ({ id: "vid_1", status, cdn_url: "https://cdn.example/clip.mp4" });
 const reservation = (extra = {}) => json({ video_id: "vid_1", upload_path: "/put", ...extra });
-const remote = { model: "galileo-1.0", input: { video: { url: "https://example.com/video.mp4" } } };
+const remote = { model: "galileo-pm", input: { video: { url: "https://example.com/video.mp4" } } };
 let dir, clip;
 const bytes = Buffer.from("test video bytes");
 test.before(async () => {
@@ -38,7 +38,7 @@ function script(...responses) {
 test("create uploads, validates, submits and polls, without exposing the key to storage", async () => {
   const { client, calls } = script(reservation(), json({}), json(video("processing")),
     json(video()), json(ev("queued")), json(ev()));
-  const params = { model: "galileo-1.0", input: { video: { path: clip }, prompt: "A ball rolls." } };
+  const params = { model: "galileo-pm", input: { video: { path: clip }, prompt: "A ball rolls." } };
   const result = await client.evaluations.create(params);
   assert.equal(result.status, "completed");
   assert.deepEqual(calls.map(c => [c.method, new URL(c.url).pathname]), [
@@ -48,7 +48,7 @@ test("create uploads, validates, submits and polls, without exposing the key to 
   assert.deepEqual(Buffer.from(calls[1].body), bytes);
   assert.equal(calls[1].headers.authorization, undefined);
   assert.deepEqual(JSON.parse(calls[4].body), {
-    model: "galileo-1.0", input: { video: { upload_id: "vid_1" }, prompt: "A ball rolls." },
+    model: "galileo-pm", input: { video: { upload_id: "vid_1" }, prompt: "A ball rolls." },
   });
   assert.deepEqual(params.input.video, { path: clip });
 });
@@ -63,7 +63,7 @@ test("create waits through pending_clip without resubmitting", async () => {
 for (const method of ["create", "submit"]) {
   test(`${method} never submits a rejected video`, async () => {
     const { client, calls } = script(reservation(), json({}), json(video("failed")));
-    await assert.rejects(client.evaluations[method]({ model: "galileo-1.0", input: { video: { path: clip } } }),
+    await assert.rejects(client.evaluations[method]({ model: "galileo-pm", input: { video: { path: clip } } }),
       InvalidRequestError);
     assert.equal(calls.length, 3);
   });
@@ -77,7 +77,7 @@ for (const method of ["create", "submit"]) {
 test("submit reuses a processing upload, waits for validation, then returns the queued ID", async () => {
   const { client, calls } = script(reservation({ skip_upload: true }), json(video("processing")),
     json(video()), json(ev("queued")));
-  const result = await client.evaluations.submit({ model: "galileo-1.0", input: { video: { path: clip } } });
+  const result = await client.evaluations.submit({ model: "galileo-pm", input: { video: { path: clip } } });
   assert.equal(result.status, "queued");
   assert.equal(calls.length, 4);
   assert.ok(calls.every(c => c.method !== "PUT"));
@@ -86,10 +86,10 @@ test("submit reuses a processing upload, waits for validation, then returns the 
 for (const source of [{ url: "https://example.com/v.mp4" }, { upload_id: "vid_1" }, { b64_json: "dmlkZW8=" }]) {
   test(`submit ${Object.keys(source)[0]} makes only the submission request`, async () => {
     const { client, calls } = script(json(ev("queued")));
-    const result = await client.evaluations.submit({ model: "galileo-1.0", input: { video: source }, metadata: { job: 1 } });
+    const result = await client.evaluations.submit({ model: "galileo-pm", input: { video: source }, metadata: { job: 1 } });
     assert.equal(result.status, "queued");
     assert.equal(calls.length, 1);
-    assert.deepEqual(JSON.parse(calls[0].body), { model: "galileo-1.0", input: { video: source }, metadata: { job: 1 } });
+    assert.deepEqual(JSON.parse(calls[0].body), { model: "galileo-pm", input: { video: source }, metadata: { job: 1 } });
   });
 }
 
@@ -126,7 +126,7 @@ for (const input of [{}, { video: { path: "x", url: "https://example.com/x" } },
   { video: { path: "x" }, typo: true }]) {
   test(`invalid input is rejected before upload: ${JSON.stringify(input)}`, async () => {
     const { client, calls } = script();
-    await assert.rejects(client.evaluations.create({ model: "galileo-1.0", input }), TypeError);
+    await assert.rejects(client.evaluations.create({ model: "galileo-pm", input }), TypeError);
     assert.equal(calls.length, 0);
   });
 }
@@ -162,4 +162,22 @@ test("models() returns galileo-pm, and create sends it", async () => {
     input: { video: { url: "https://example.com/v.mp4" }, prompt: "A ball rolls." } });
   assert.equal(JSON.parse(calls[1].body).model, "galileo-pm");
   assert.equal(result.model, "galileo-pm");
+});
+
+for (const method of ["create", "submit"]) {
+  test(`${method} defaults model to galileo-pm`, async () => {
+    // The API requires `model` and offers API keys only galileo-pm.
+    const { client, calls } = script(json({ ...ev(), model: "galileo-pm" }));
+    await client.evaluations[method]({ input: { video: { url: "https://example.com/v.mp4" }, prompt: "A ball rolls." } });
+    assert.equal(JSON.parse(calls[0].body).model, "galileo-pm");
+  });
+}
+
+test("a retired model is refused as an invalid request", async () => {
+  const { client, calls } = script(json({ error: { type: "invalid_request_error", code: "model_not_available",
+    message: "galileo-pm is not available on the API", request_id: "req_1" } }, 400));
+  await assert.rejects(client.evaluations.submit({ model: "galileo-1.0",
+    input: { video: { url: "https://example.com/v.mp4" }, prompt: "A ball rolls." } }),
+  (e) => e instanceof InvalidRequestError && e.code === "model_not_available");
+  assert.equal(calls.length, 1);
 });

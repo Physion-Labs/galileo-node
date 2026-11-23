@@ -7,15 +7,18 @@ assert.ok(process.env.GALILEO_API_KEY, "GALILEO_API_KEY is required");
 assert.ok(process.env.GALILEO_TEST_VIDEO_URL, "GALILEO_TEST_VIDEO_URL is required");
 const client = new Client({ baseURL: process.env.GALILEO_BASE_URL });
 const local = await client.evaluations.create({
-  model: "galileo-1.0",
-  input: { video: { path: fileURLToPath(new URL("../test/fixtures/release.mp4", import.meta.url)) } },
+  model: "galileo-pm",
+  input: {
+    video: { path: fileURLToPath(new URL("../test/fixtures/release.mp4", import.meta.url)) },
+    prompt: "A red background fills the frame.",
+  },
 });
 assert.equal(local.status, "completed", local.error?.message);
 assert.ok(local.result);
 console.log("Local file → automatic upload → create:", local.id, local.status);
 
 const job = await client.evaluations.submit({
-  model: "galileo-1.0",
+  model: "galileo-pm",
   input: {
     video: { url: process.env.GALILEO_TEST_VIDEO_URL },
     prompt: "A red background fills the frame.",

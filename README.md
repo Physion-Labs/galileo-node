@@ -18,8 +18,10 @@ below with what your video was meant to show.
 
 ## What Galileo does
 
-Submit a generated video and a prompt; get back the places where the video has
-visual defects and the places where it does not do what the prompt asked.
+Submit a generated video and a prompt; get back the places where the video does
+not do what the prompt asked. The API model is `galileo-pm` (prompt alignment),
+and it is what `create` and `submit` use when you do not pass `model`. A prompt
+is required.
 
 ```ts
 import { Client } from "@physionlabs/galileo";
@@ -28,7 +30,7 @@ const client = new Client(); // reads GALILEO_API_KEY
 
 // Upload the local file and wait for the evaluation result.
 const evaluation = await client.evaluations.create({
-  model: "galileo-1.0",
+  model: "galileo-pm",
   input: {
     video: { path: "./video.mp4" },
     prompt: "A red ball rolls off a table and bounces twice.",
@@ -55,7 +57,7 @@ Uploading separately to reuse a video across evaluations:
 const video = await client.videos.upload({ path: "./clip.mp4" });
 if (video.status !== "ready") throw new Error("Video failed validation.");
 const evaluation = await client.evaluations.create({
-  model: "galileo-1.0",
+  model: "galileo-pm",
   input: {
     video: { upload_id: video.id },
     prompt: "A red ball rolls off a table and bounces twice.",
@@ -111,5 +113,13 @@ For a hosted video, use `input.video.url` instead of `input.video.path`.
 ## Migrating from rc.5
 
 Import `Client`, move `video` and `prompt` into `input`, and select
-`galileo-1.0`. Replace create-and-wait with `create`, and submit-only `create`
+`galileo-pm` (or omit `model`). Replace create-and-wait with `create`, and submit-only `create`
 with `submit`. The original `Galileo` entry point retains its old behavior.
+
+## Migrating to rc.10
+
+The API now offers API keys only `galileo-pm`. `galileo-1.0` and `galileo` are
+refused with `400 model_not_available` (thrown as `InvalidRequestError`), and
+`ModelId` is `"galileo-pm"` alone, so passing either is now a type error. Pass
+`model: "galileo-pm"` or omit `model`, and always send a prompt. Evaluations
+created earlier still read back with `model: "galileo"` (`EvaluationModelId`).

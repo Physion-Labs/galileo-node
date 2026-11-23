@@ -7,6 +7,9 @@ import { pollUntil, type PollOptions } from "../internal/poll.js";
 import type { RequestOptions } from "../internal/options.js";
 import type { Evaluation, EvaluationCreateParams, LegacyEvaluationCreateParams, EvaluationList, EvaluationStatus } from "../types.js";
 
+/** The API requires `model` on a submission, and API keys can use only this one. */
+const DEFAULT_MODEL = "galileo-pm";
+
 /**
  * An evaluation stops changing at one of these.
  *
@@ -226,10 +229,15 @@ export class Evaluations extends EvaluationResource {
     super(transport);
   }
 
-  /** Upload if needed, then submit. Does not wait for evaluation completion. */
+  /**
+   * Upload if needed, then submit. Does not wait for evaluation completion.
+   * `model` defaults to `galileo-pm`.
+   */
   async submit(params: EvaluationCreateParams, opts: SubmissionOptions = {}): Promise<Evaluation> {
     opts.signal?.throwIfAborted();
-    if (!params || typeof params.model !== "string" || !params.model.trim()) {
+    if (!params || typeof params !== "object") throw new TypeError("params must be an object");
+    const model = params.model ?? DEFAULT_MODEL;
+    if (typeof model !== "string" || !model.trim()) {
       throw new TypeError("model must be a non-empty string");
     }
     const input = params.input;
@@ -263,7 +271,7 @@ export class Evaluations extends EvaluationResource {
     }
     return this.transport.json<Evaluation>({
       method: "POST", path: "/v1/evaluations",
-      body: { ...params, input: { ...input, video } },
+      body: { ...params, model, input: { ...input, video } },
       signal: opts.signal, maxRetries: 0,
     });
   }
