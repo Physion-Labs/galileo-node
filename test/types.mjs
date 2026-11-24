@@ -82,3 +82,24 @@ void list.data.filter((m) => m.id === "galileo");
     assert.fail(e.stdout?.toString() ?? e.message);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a galileo-pm summary without has_visual_glitch is an EvaluationSummary", () => {
+  // Accounts without Galileo access get no visual-glitch fields; the summary is
+  // { num_glitches, has_prompt_misalignment } and must type as one.
+  const dir = mkdtempSync(join(tmpdir(), "galileo-types-"));
+  try {
+    const file = join(dir, "summary.ts");
+    writeFileSync(file, `
+import type { EvaluationSummary, DetectorState } from "${join(root, "dist", "index.js")}";
+const summary: EvaluationSummary = { num_glitches: 2, has_prompt_misalignment: true };
+const detectors: DetectorState[] = [{ detector: "prompt_misalignment", status: "completed" }];
+const vg: boolean | undefined = summary.has_visual_glitch;
+void detectors; void vg;
+`);
+    execFileSync("pnpm", ["exec", "tsc", "--noEmit", "--strict", "--target", "ES2022",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext", "--skipLibCheck", file],
+      { cwd: root, stdio: "pipe" });
+  } catch (e) {
+    assert.fail(e.stdout?.toString() ?? e.message);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
