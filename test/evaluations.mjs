@@ -181,3 +181,12 @@ test("a retired model is refused as an invalid request", async () => {
   (e) => e instanceof InvalidRequestError && e.code === "model_not_available");
   assert.equal(calls.length, 1);
 });
+
+test("a completed galileo-pm run without visual-glitch fields is returned as sent", async () => {
+  const body = { ...ev(), model: "galileo-pm",
+    detectors: [{ detector: "prompt_misalignment", status: "completed" }],
+    result: { glitches: [], summary: { num_glitches: 2, has_prompt_misalignment: true } } };
+  const { client } = script(json(body));
+  const got = await client.evaluations.retrieve("eval_1");
+  assert.deepEqual(got.result.summary, { num_glitches: 2, has_prompt_misalignment: true });
+});

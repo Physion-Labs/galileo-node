@@ -4,7 +4,9 @@ info:
   version: 0.1.0
   summary: Evaluate generated videos with Galileo.
   description: |
-    Submit generated videos for visual-glitch and prompt-misalignment analysis.
+    Submit generated videos for prompt-misalignment analysis (`galileo-pm`).
+    Accounts with Galileo access can also run `galileo-1.0`, which adds
+    visual-glitch detection.
     Evaluation jobs run asynchronously. Retrieve a job until its status reaches
     `completed`, `partial`, or `failed`.
   contact:
@@ -581,8 +583,13 @@ components:
         Omitting `model` means `galileo-pm`.
 
 
-        `galileo-1.0` and `galileo` are not available on the API and are
-        refused with `400 model_not_available` before anything is charged.
+        `galileo-1.0` (and `galileo`), which adds visual-glitch detection, is
+        available only to accounts with Galileo access, and is deliberately not
+        in this enum: for every other account it is refused with
+        `400 model_not_available` before anything is charged. An account with
+        Galileo access may send it anyway, and `GET /v1/models` lists it for
+        that account. An omitted `model` means `galileo-pm` for every account,
+        with or without Galileo access.
     EvaluationModelId:
       type: string
       enum: [galileo, galileo-pm]
@@ -593,6 +600,10 @@ components:
     GlitchType:
       type: string
       enum: [visual_glitch, prompt_misalignment]
+      description: >-
+        `visual_glitch` is available only to accounts with Galileo access. For
+        every other account it is refused in `glitch_types` with
+        `400 unsupported_glitch_type`, and never appears in a response.
     EvaluationStatus:
       type: string
       enum: [pending_clip, queued, processing, completed, partial, failed]
@@ -812,7 +823,8 @@ components:
             Detectors to run. Defaults to those supported by the supplied prompt
             and the chosen model. Only detectors the model runs are accepted
             (its `detectors` in `GET /v1/models`): `visual_glitch` with
-            `galileo-pm` is refused with `400 unsupported_glitch_type`.
+            `galileo-pm`, or from an account without Galileo access, is refused
+            with `400 unsupported_glitch_type`.
         metadata:
           type: object
           additionalProperties: true
@@ -987,6 +999,9 @@ components:
         would be wrong on almost every finding.
     VisualGlitch:
       type: object
+      description: >-
+        A visual-glitch finding. Returned only to accounts with Galileo access,
+        on evaluations that ran `galileo`.
       additionalProperties: false
       required: [id, type, description]
       properties:
@@ -1052,10 +1067,18 @@ components:
         before presenting either as a verdict. These two booleans are kept as
         required non-nullable for compatibility — every existing consumer reads
         them as plain booleans — rather than growing a third state here.
-      required: [num_glitches, has_visual_glitch, has_prompt_misalignment]
+
+
+        `has_visual_glitch` is present only for accounts with Galileo access.
+        For every other account it is absent, `num_glitches` counts the
+        findings that are returned, and evaluations created earlier with
+        `galileo` read back without their visual-glitch findings.
+      required: [num_glitches, has_prompt_misalignment]
       properties:
         num_glitches: { type: integer, minimum: 0 }
-        has_visual_glitch: { type: boolean }
+        has_visual_glitch:
+          type: boolean
+          description: Present only for accounts with Galileo access.
         has_prompt_misalignment: { type: boolean }
     VideoInfo:
       type: object
@@ -1460,8 +1483,9 @@ components:
         id:
           $ref: "#/components/schemas/EvaluationModelId"
           description: >-
-            An API key on a customer plan sees `galileo-pm` only. Internal
-            accounts also see `galileo`, so a client must not reject it.
+            An account without Galileo access sees `galileo-pm` only. Accounts
+            with Galileo access also see `galileo`, so a client must not reject
+            it.
         object:
           type: string
           const: model
@@ -1611,11 +1635,13 @@ components:
         - prompt_too_long
         - prompt_refused
         - invalid_glitch_types
-        # 400. A real detector that the chosen model does not run: `galileo-pm`
-        # asked for `visual_glitch`. Refused before anything is charged.
+        # 400. A real detector that the chosen model does not run (`galileo-pm`
+        # asked for `visual_glitch`), or `visual_glitch` from an account without
+        # Galileo access. Refused before anything is charged.
         - unsupported_glitch_type
         # 400. The model exists but is not available on the API
-        # (`galileo-1.0` / `galileo`). `galileo-pm` is the API model. Refused
+        # (`galileo-1.0` / `galileo`) to an account without Galileo access.
+        # `galileo-pm` is the API model. Refused
         # before anything is charged.
         - model_not_available
         - video_too_long
